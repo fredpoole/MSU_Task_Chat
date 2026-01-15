@@ -482,11 +482,15 @@ function wireDataChannel(dc) {
 
   dc.onerror = (e) => {
     console.error('Data channel error:', e);
+    append('assistant', 'Data channel error occurred');
     setStatus('error');
   };
 
-  dc.onclose = () => {
-    console.log('Data channel closed');
+  dc.onclose = (e) => {
+    console.log('Data channel closed. Code:', e.code, 'Reason:', e.reason);
+    if (e.code !== 1000) {
+      append('assistant', 'Connection lost: ' + (e.reason || 'Unknown reason'));
+    }
   };
 
   const deliver = (m) => handleOAIEvent(m);
@@ -494,7 +498,13 @@ function wireDataChannel(dc) {
 
   dc.onmessage = (e) => {
     console.log('Received message:', e.data.substring(0, 100));
-    try { bufferedDeliver(JSON.parse(e.data)); } catch(err) { console.error('Parse error:', err); }
+    try { 
+      const parsed = JSON.parse(e.data);
+      console.log('Message type:', parsed.type);
+      bufferedDeliver(parsed); 
+    } catch(err) { 
+      console.error('Parse error:', err); 
+    }
   };
 }
 
