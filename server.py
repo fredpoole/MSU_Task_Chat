@@ -130,7 +130,18 @@ def build_system_prompt(bot: dict) -> str:
     VOICE/LANGUAGE: Speak primarily in {bot['language_hint']}. If the learner switches language, mirror briefly then steer back.
     ERROR HANDLING: Track learner errors in each utterance; if 3+ issues (grammar/lexis/pronunciation leading to ambiguity), be strict!!! on pronunciation,
       politely signal misunderstanding and ask for a clear repeat or rephrase, offering a simple model. 
-    RECAP: When the scenario goals are completed, give a 2–3 bullet summary and suggest one actionable next step.
+    
+    PERFORMANCE TRACKING: Throughout the conversation, mentally note:
+      - Grammar accuracy and common mistakes
+      - Vocabulary range and appropriateness
+      - Pronunciation clarity
+      - Ability to complete the task goals
+      - Confidence and fluency
+    
+    RECAP: When asked for a summary or when scenario goals are completed, provide:
+      - 2-3 specific bullet points highlighting strengths and areas for improvement
+      - One concrete, actionable next step for practice
+      - Encouragement tailored to their performance level
     """).strip()
     return base
 
@@ -167,6 +178,7 @@ def session():
                 "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT),
                 "instructions": system_prompt,
                 "modalities": ["audio", "text"],
+                "input_audio_transcription": {"model": "whisper-1"},
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": VAD_THRESHOLD,
@@ -232,6 +244,7 @@ REALTIME_HTML = r"""
         <button id="connect">Connect</button>
         <button id="disconnect" class="stop" disabled>Disconnect</button>
         <button id="nudge" class="ghost" disabled>Push-to-talk</button>
+        <button id="summary" class="ghost" disabled>Get Summary</button>
         <button id="clear" class="ghost">Clear log</button>
         <button id="next" class="ghost">Next scenario</button>
         <span id="status" class="status">idle</span>
@@ -252,6 +265,7 @@ const logEl = document.getElementById('log');
 const connectBtn = document.getElementById('connect');
 const disconnectBtn = document.getElementById('disconnect');
 const nudgeBtn = document.getElementById('nudge');
+const summaryBtn = document.getElementById('summary');
 const clearBtn = document.getElementById('clear');
 const nextBtn = document.getElementById('next');
 const scenarioBar = document.getElementById('scenarioBar');
@@ -425,10 +439,13 @@ function handleOAIEvent(msg) {
     }
     
     case 'conversation.item.input_audio_transcription.failed': {
-      console.error('Transcription failed:', msg);
-      if (userEl) userEl.textContent = 'You: [Audio detected but transcription failed]';
+      console.warn('Transcription failed (audio still processed):', msg);
+      if (userEl) {
+        userEl.textContent = 'You: [Audio received - transcription unavailable]';
+        userEl.style.opacity = '0.7';
+      }
       userEl=null; userBuf='';
-      // Don't break the flow - the response might still work
+      // Don't show error to user - the bot can still respond to audio
       break;
     }
     case '__agent.buffer.flush': {
@@ -617,6 +634,7 @@ async function connect(){
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
     nudgeBtn.disabled = false;
+    summaryBtn.disabled = false;
     setStatus('ready');
     append('assistant', 'Connected. Speak when you are ready');
     console.log('Connection complete!');
@@ -629,7 +647,7 @@ async function connect(){
 }
 
 async function disconnect(){
-  nudgeBtn.disabled = true; disconnectBtn.disabled = true; connectBtn.disabled = false;
+  nudgeBtn.disabled = true; disconnectBtn.disabled = true; connectBtn.disabled = false; summaryBtn.disabled = true;
   if (dc) try{ dc.close(); }catch(e){}
   if (pc) try{ pc.close(); }catch(e){}
   if (micStream) for (const t of micStream.getTracks()) t.stop();
@@ -641,6 +659,24 @@ nudgeBtn.addEventListener('click', ()=>{
   if (!dc || dc.readyState !== 'open') return;
   dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'] } }));
   append('user', '⏺️ Nudge sent (audio+text requested).');
+});
+
+// Request summary/analysis
+summaryBtn.addEventListener('click', ()=>{
+  if (!dc || dc.readyState !== 'open') return;
+  dc.send(JSON.stringify({ 
+    type: 'conversation.item.create',
+    item: {
+      type: 'message',
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: 'Please provide a summary of our conversation with 2-3 bullet points highlighting my performance and one actionable next step for improvement.'
+      }]
+    }
+  }));
+  dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'] } }));
+  append('user', '📊 Summary requested');
 });
 
 clearBtn.addEventListener('click', ()=>{ logEl.innerHTML=''; });
