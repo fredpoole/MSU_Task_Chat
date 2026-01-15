@@ -128,20 +128,19 @@ def build_system_prompt(bot: dict) -> str:
     CONSTRAINTS: {bot['constraints']}
     STYLE: Conversational, concise, interactive. Keep turns short; end most turns with a brief, relevant question. But also add personal information dependent on your role. 
     VOICE/LANGUAGE: Speak primarily in {bot['language_hint']}. If the learner switches language, mirror briefly then steer back.
+    
     ERROR HANDLING: Track learner errors in each utterance; if 3+ issues (grammar/lexis/pronunciation leading to ambiguity), be strict!!! on pronunciation,
-      politely signal misunderstanding and ask for a clear repeat or rephrase, offering a simple model. 
+      politely signal misunderstanding and ask for a clear repeat or rephrase, offering a simple model. When correcting:
+      - Be gentle but clear
+      - Provide the correct form
+      - Give a brief explanation if helpful
+      - Continue the conversation naturally
     
-    PERFORMANCE TRACKING: Throughout the conversation, mentally note:
-      - Grammar accuracy and common mistakes
-      - Vocabulary range and appropriateness
-      - Pronunciation clarity
-      - Ability to complete the task goals
-      - Confidence and fluency
+    EXAMPLE CORRECTIONS:
+    - If learner says "I want two coffee", you might say: "Two coffees - yes! What size would you like?"
+    - If pronunciation is unclear, say: "Sorry, I didn't quite catch that. Could you repeat 'bagel' for me?"
     
-    RECAP: When asked for a summary or when scenario goals are completed, provide:
-      - 2-3 specific bullet points highlighting strengths and areas for improvement
-      - One concrete, actionable next step for practice
-      - Encouragement tailored to their performance level
+    Your corrections will help track the learner's progress for later analysis.
     """).strip()
     return base
 
@@ -203,6 +202,109 @@ def session():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    """Analyze conversation and provide ACTFL assessment"""
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "Missing OPENAI_API_KEY"}), 400
+    
+    body = request.get_json(silent=True) or {}
+    conversation = body.get("conversation", [])
+    bot_id = body.get("bot_id", "")
+    
+    if not conversation:
+        return jsonify({"error": "No conversation provided"}), 400
+    
+    # Get bot info for context
+    bot = BOT_MAP.get(bot_id, BOTS[0])
+    
+    # Build transcript
+    transcript = "CONVERSATION TRANSCRIPT\n"
+    transcript += "=" * 60 + "\n"
+    transcript += f"Scenario: {bot['title']}\n"
+    transcript += f"Date: {conversation[0].get('timestamp', 'N/A')[:10] if conversation else 'N/A'}\n"
+    transcript += "=" * 60 + "\n\n"
+    
+    for turn in conversation:
+        role_label = "LEARNER" if turn['role'] == 'learner' else "AGENT"
+        transcript += f"{role_label}: {turn['text']}\n\n"
+    
+    # Extract only learner turns for analysis
+    learner_turns = [turn['text'] for turn in conversation if turn['role'] == 'learner']
+    learner_text = "\n".join(learner_turns)
+    
+    # Create analysis prompt
+    analysis_prompt = f"""You are an expert language assessor specializing in ACTFL proficiency guidelines. 
+
+Analyze the following learner's speech from a language learning conversation in {bot['language_hint']}.
+
+LEARNER'S TURNS:
+{learner_text}
+
+SCENARIO CONTEXT:
+{bot['task']}
+
+Provide a comprehensive analysis with:
+
+1. ACTFL PROFICIENCY ESTIMATE
+   - Overall level (Novice Low/Mid/High, Intermediate Low/Mid/High, Advanced Low/Mid/High, Superior, Distinguished)
+   - Brief justification for this rating
+
+2. DETAILED ERROR ANALYSIS
+   - Grammar errors (list specific examples with corrections)
+   - Vocabulary issues (inappropriate word choices, missing vocabulary)
+   - Pronunciation concerns (if evident from context or corrections needed)
+   - Discourse/pragmatic issues
+
+3. STRENGTHS
+   - What the learner did well
+   - Evidence of progress or good strategies
+
+4. SPECIFIC RECOMMENDATIONS
+   - 3-5 concrete action items for improvement
+   - Suggested practice activities
+   - Resources or focus areas
+
+Be specific, constructive, and evidence-based. Quote actual learner utterances when discussing errors."""
+
+    try:
+        # Call OpenAI API for analysis
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are an expert language assessor with deep knowledge of ACTFL proficiency guidelines."},
+                    {"role": "user", "content": analysis_prompt}
+                ],
+                "temperature": 0.3,
+            },
+            timeout=60,
+        )
+        r.raise_for_status()
+        analysis = r.json()["choices"][0]["message"]["content"]
+        
+        # Combine transcript and analysis
+        full_report = transcript + "\n" + "=" * 60 + "\n"
+        full_report += "PERFORMANCE ANALYSIS\n"
+        full_report += "=" * 60 + "\n\n"
+        full_report += analysis
+        
+        return Response(
+            full_report,
+            mimetype="text/plain",
+            headers={"Content-Disposition": f"attachment; filename=analysis-{bot_id}.txt"}
+        )
+        
+    except requests.HTTPError as e:
+        return jsonify({"error": f"OpenAI error {e.response.status_code}", "details": e.response.text}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/realtime")
 def realtime():
     # Inject a public view of the bots (id + title only)
@@ -244,7 +346,7 @@ REALTIME_HTML = r"""
         <button id="connect">Connect</button>
         <button id="disconnect" class="stop" disabled>Disconnect</button>
         <button id="nudge" class="ghost" disabled>Push-to-talk</button>
-        <button id="summary" class="ghost" disabled>Get Summary</button>
+        <button id="analyze" class="ghost" disabled>Analyze My Chat</button>
         <button id="clear" class="ghost">Clear log</button>
         <button id="next" class="ghost">Next scenario</button>
         <span id="status" class="status">idle</span>
@@ -265,7 +367,7 @@ const logEl = document.getElementById('log');
 const connectBtn = document.getElementById('connect');
 const disconnectBtn = document.getElementById('disconnect');
 const nudgeBtn = document.getElementById('nudge');
-const summaryBtn = document.getElementById('summary');
+const analyzeBtn = document.getElementById('analyze');
 const clearBtn = document.getElementById('clear');
 const nextBtn = document.getElementById('next');
 const scenarioBar = document.getElementById('scenarioBar');
@@ -275,6 +377,9 @@ const statusEl = document.getElementById('status');
 
 let pc, dc, micStream;
 let selectedBotId = bots[0]?.id || null;
+
+// Store conversation transcript
+let conversationHistory = [];
 
 // Show assistant only after it finishes speaking
 const SHOW_AGENT_AFTER_SPEAKS = true;
@@ -363,6 +468,13 @@ function append(who, text){
   d.className = 'msg ' + who;
   d.textContent = (who==='assistant'?'Agent':'You') + ': ' + text;
   logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+  
+  // Store in conversation history
+  conversationHistory.push({
+    role: who === 'assistant' ? 'agent' : 'learner',
+    text: text,
+    timestamp: new Date().toISOString()
+  });
 }
 function setStatus(t){ statusEl.textContent = t; }
 function selectBot(botId){
@@ -634,7 +746,7 @@ async function connect(){
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
     nudgeBtn.disabled = false;
-    summaryBtn.disabled = false;
+    analyzeBtn.disabled = false;
     setStatus('ready');
     append('assistant', 'Connected. Speak when you are ready');
     console.log('Connection complete!');
@@ -647,7 +759,7 @@ async function connect(){
 }
 
 async function disconnect(){
-  nudgeBtn.disabled = true; disconnectBtn.disabled = true; connectBtn.disabled = false; summaryBtn.disabled = true;
+  nudgeBtn.disabled = true; disconnectBtn.disabled = true; connectBtn.disabled = false; analyzeBtn.disabled = true;
   if (dc) try{ dc.close(); }catch(e){}
   if (pc) try{ pc.close(); }catch(e){}
   if (micStream) for (const t of micStream.getTracks()) t.stop();
@@ -661,25 +773,52 @@ nudgeBtn.addEventListener('click', ()=>{
   append('user', '⏺️ Nudge sent (audio+text requested).');
 });
 
-// Request summary/analysis
-summaryBtn.addEventListener('click', ()=>{
-  if (!dc || dc.readyState !== 'open') return;
-  dc.send(JSON.stringify({ 
-    type: 'conversation.item.create',
-    item: {
-      type: 'message',
-      role: 'user',
-      content: [{
-        type: 'input_text',
-        text: 'Please provide a summary of our conversation with 2-3 bullet points highlighting my performance and one actionable next step for improvement.'
-      }]
-    }
-  }));
-  dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'] } }));
-  append('user', '📊 Summary requested');
+// Analyze conversation and download report
+analyzeBtn.addEventListener('click', async ()=>{
+  if (conversationHistory.length === 0) {
+    alert('No conversation to analyze yet. Start speaking first!');
+    return;
+  }
+  
+  analyzeBtn.disabled = true;
+  analyzeBtn.textContent = 'Analyzing...';
+  
+  try {
+    const response = await fetch('/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        bot_id: selectedBotId,
+        conversation: conversationHistory
+      })
+    });
+    
+    if (!response.ok) throw new Error('Analysis failed');
+    
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `conversation-analysis-${new Date().toISOString().slice(0,10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    
+    append('assistant', '📊 Analysis downloaded!');
+  } catch (e) {
+    console.error('Analysis error:', e);
+    alert('Failed to generate analysis. Please try again.');
+  } finally {
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = 'Analyze My Chat';
+  }
 });
 
-clearBtn.addEventListener('click', ()=>{ logEl.innerHTML=''; });
+clearBtn.addEventListener('click', ()=>{ 
+  logEl.innerHTML=''; 
+  conversationHistory = [];
+});
 nextBtn.addEventListener('click', ()=>{
   const idx = bots.findIndex(b=>b.id===selectedBotId);
   const next = bots[(idx+1) % bots.length];
