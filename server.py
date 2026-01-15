@@ -167,7 +167,6 @@ def session():
                 "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT),
                 "instructions": system_prompt,
                 "modalities": ["audio", "text"],
-                "input_audio_transcription": {"model": "whisper-1"},
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": VAD_THRESHOLD,
@@ -424,6 +423,14 @@ function handleOAIEvent(msg) {
       if (userEl) userEl.textContent = 'You: ' + (msg.transcript||userBuf);
       userEl=null; userBuf=''; break;
     }
+    
+    case 'conversation.item.input_audio_transcription.failed': {
+      console.error('Transcription failed:', msg);
+      if (userEl) userEl.textContent = 'You: [Audio detected but transcription failed]';
+      userEl=null; userBuf='';
+      // Don't break the flow - the response might still work
+      break;
+    }
     case '__agent.buffer.flush': {
   append('assistant', (msg.text || '').trim());
   break;
@@ -447,6 +454,20 @@ case 'conversation.item.created': {
   break;
 }
 
+    case 'response.created': {
+      console.log('Response created:', msg.response);
+      break;
+    }
+    
+    case 'response.done': {
+      console.log('Response done:', msg.response);
+      if (msg.response && msg.response.status === 'failed') {
+        console.error('Response failed:', msg.response.status_details);
+        append('assistant', 'Sorry, I encountered an error. Please try again.');
+      }
+      break;
+    }
+    
     // Status only
     case 'input_audio_buffer.speech_started': {
   userTurnOpen = true;
