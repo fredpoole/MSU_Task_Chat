@@ -540,10 +540,30 @@ async function connect(){
       console.log('Connection state:', pc.connectionState);
     };
     
+    // Add mic tracks and monitor them
     for (const track of micStream.getTracks()) {
-      console.log('Adding mic track:', track.kind);
+      console.log('Adding mic track:', track.kind, 'enabled:', track.enabled, 'muted:', track.muted, 'readyState:', track.readyState);
       pc.addTrack(track, micStream);
+      
+      // Monitor track state
+      track.onended = () => console.log('Mic track ended!');
+      track.onmute = () => console.log('Mic track muted!');
+      track.onunmute = () => console.log('Mic track unmuted!');
     }
+    
+    // Monitor audio stats
+    const checkAudioStats = setInterval(async () => {
+      if (!pc || pc.connectionState !== 'connected') {
+        clearInterval(checkAudioStats);
+        return;
+      }
+      const stats = await pc.getStats();
+      stats.forEach(report => {
+        if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+          console.log('Sending audio - bytes:', report.bytesSent, 'packets:', report.packetsSent);
+        }
+      });
+    }, 3000);
 
     // 4) Data channel for commands/events
     dc = pc.createDataChannel('oai-events');
