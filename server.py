@@ -475,34 +475,65 @@ case 'input_audio_buffer.speech_stopped': setStatus('processing…'); break;
 
 function wireDataChannel(dc) {
   dc.onopen = () => {
+    console.log('Data channel opened');
     dc.send(JSON.stringify({ type: 'session.update', session: { modalities: ['audio','text'] } }));
     setStatus('connected');
+  };
+
+  dc.onerror = (e) => {
+    console.error('Data channel error:', e);
+    setStatus('error');
+  };
+
+  dc.onclose = () => {
+    console.log('Data channel closed');
   };
 
   const deliver = (m) => handleOAIEvent(m);
   const bufferedDeliver = createAgentBuffer(deliver);
 
   dc.onmessage = (e) => {
-    try { bufferedDeliver(JSON.parse(e.data)); } catch { /* ignore non-JSON */ }
+    console.log('Received message:', e.data.substring(0, 100));
+    try { bufferedDeliver(JSON.parse(e.data)); } catch(err) { console.error('Parse error:', err); }
   };
 }
 
 async function connect(){
   connectBtn.disabled = true;
   try{
+    console.log('Starting connection...');
     // 1) Ask server for ephemeral token with selected bot
     const sessRes = await fetch('/session', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ bot_id: selectedBotId }) });
     const session = await sessRes.json();
     if (!sessRes.ok) throw new Error(session.error || 'Session error');
+    console.log('Session created:', session);
 
     // 2) Mic
+    console.log('Requesting microphone access...');
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log('Microphone access granted');
 
     // 3) WebRTC peer connection
+    console.log('Creating peer connection...');
     pc = new RTCPeerConnection();
     pc.addTransceiver('audio', { direction: 'recvonly' }); // receive audio
-    pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; };
-    for (const track of micStream.getTracks()) pc.addTrack(track, micStream); // send mic
+    pc.ontrack = (e) => { 
+      console.log('Received audio track');
+      remoteAudio.srcObject = e.streams[0]; 
+    };
+    
+    pc.oniceconnectionstatechange = () => {
+      console.log('ICE connection state:', pc.iceConnectionState);
+    };
+    
+    pc.onconnectionstatechange = () => {
+      console.log('Connection state:', pc.connectionState);
+    };
+    
+    for (const track of micStream.getTracks()) {
+      console.log('Adding mic track:', track.kind);
+      pc.addTrack(track, micStream);
+    }
 
     // 4) Data channel for commands/events
     dc = pc.createDataChannel('oai-events');
@@ -512,9 +543,11 @@ async function connect(){
     const offer = await pc.createOffer({ offerToReceiveAudio: true });
     await pc.setLocalDescription(offer);
     await waitForIceGatheringComplete(pc);
+    console.log('ICE gathering complete');
 
     // 6) Handshake with Realtime
     const url = `https://api.openai.com/v1/realtime?model=${encodeURIComponent(session.model || 'gpt-4o-realtime-preview-2024-12-17')}`;
+    console.log('Connecting to OpenAI Realtime API...');
     const ans = await fetch(url, {
       method: 'POST',
       body: pc.localDescription.sdp,
@@ -526,6 +559,7 @@ async function connect(){
     });
     const sdpText = await ans.text();
     if (!ans.ok) { append('assistant', 'Realtime handshake failed: ' + sdpText); throw new Error('Realtime SDP error'); }
+    console.log('Received SDP answer from OpenAI');
     const answer = { type: 'answer', sdp: sdpText };
     await pc.setRemoteDescription(answer);
 
@@ -534,11 +568,12 @@ async function connect(){
     nudgeBtn.disabled = false;
     setStatus('ready');
     append('assistant', 'Connected. Speak when you are ready');
+    console.log('Connection complete!');
   }catch(e){
     connectBtn.disabled = false;
     setStatus('error');
     append('assistant', 'Connect error: ' + e.message);
-    console.error(e);
+    console.error('Connection error:', e);
   }
 }
 
