@@ -19,31 +19,106 @@ import re
 from collections import Counter
 
 # NLP libraries for analysis
+ANALYSIS_AVAILABLE = False
+NLP_ERROR_MESSAGE = None
+
+print("=" * 60)
+print("Initializing NLP packages for conversation analysis...")
+print("=" * 60)
+
 try:
+    print("Step 1: Importing textstat...")
     import textstat
-    import nltk
-    from nltk.tokenize import word_tokenize, sent_tokenize
-    from nltk.corpus import stopwords
+    print(f"✓ textstat imported successfully (version: {getattr(textstat, '__version__', 'unknown')})")
     
-    # Download required NLTK data (will only download if not present)
+    print("\nStep 2: Importing nltk...")
+    import nltk
+    print(f"✓ nltk imported successfully (version: {nltk.__version__})")
+    
+    print("\nStep 3: Setting NLTK data directory...")
+    import os
+    # Ensure NLTK data directory exists and is writable
+    nltk_data_dir = os.path.expanduser('~/nltk_data')
+    if not os.path.exists(nltk_data_dir):
+        os.makedirs(nltk_data_dir, exist_ok=True)
+        print(f"✓ Created NLTK data directory: {nltk_data_dir}")
+    else:
+        print(f"✓ NLTK data directory exists: {nltk_data_dir}")
+    
+    # Add to NLTK data path if not already there
+    if nltk_data_dir not in nltk.data.path:
+        nltk.data.path.insert(0, nltk_data_dir)
+    print(f"NLTK data paths: {nltk.data.path[:3]}")  # Show first 3 paths
+    
+    print("\nStep 4: Downloading NLTK data files...")
+    
+    # Download punkt tokenizer
     try:
         nltk.data.find('tokenizers/punkt')
+        print("✓ punkt tokenizer already downloaded")
     except LookupError:
-        nltk.download('punkt', quiet=True)
+        print("Downloading punkt tokenizer...")
+        nltk.download('punkt', quiet=False, download_dir=nltk_data_dir)
+        try:
+            nltk.download('punkt_tab', quiet=False, download_dir=nltk_data_dir)
+        except:
+            pass  # punkt_tab might not exist in older NLTK versions
+    
+    # Download stopwords
     try:
         nltk.data.find('corpora/stopwords')
+        print("✓ stopwords already downloaded")
     except LookupError:
-        nltk.download('stopwords', quiet=True)
+        print("Downloading stopwords...")
+        nltk.download('stopwords', quiet=False, download_dir=nltk_data_dir)
+    
+    # Download POS tagger
     try:
         nltk.data.find('taggers/averaged_perceptron_tagger')
+        print("✓ POS tagger already downloaded")
     except LookupError:
-        nltk.download('averaged_perceptron_tagger', quiet=True)
-        
+        print("Downloading POS tagger...")
+        nltk.download('averaged_perceptron_tagger', quiet=False, download_dir=nltk_data_dir)
+        try:
+            nltk.download('averaged_perceptron_tagger_eng', quiet=False, download_dir=nltk_data_dir)
+        except:
+            pass  # Might not exist in older versions
+    
+    print("\nStep 5: Importing NLTK modules...")
+    from nltk.tokenize import word_tokenize, sent_tokenize
+    from nltk.corpus import stopwords
+    print("✓ NLTK modules imported successfully")
+    
     ANALYSIS_AVAILABLE = True
-except ImportError:
-    ANALYSIS_AVAILABLE = False
-    print("Warning: textstat or nltk not installed. Analysis features will be limited.")
-    print("Install with: pip install textstat nltk")
+    print("\n" + "=" * 60)
+    print("✓✓✓ NLP ANALYSIS FEATURES FULLY ENABLED ✓✓✓")
+    print("=" * 60)
+    
+except ImportError as e:
+    NLP_ERROR_MESSAGE = f"Import error: {str(e)}"
+    print("\n" + "=" * 60)
+    print("✗ IMPORT ERROR - NLP packages not installed")
+    print("=" * 60)
+    print(f"Error details: {NLP_ERROR_MESSAGE}")
+    print("\nTo fix this issue:")
+    print("1. Ensure requirements.txt contains:")
+    print("   textstat==0.7.3")
+    print("   nltk==3.8.1")
+    print("2. Check Render build logs to confirm packages were installed")
+    print("=" * 60)
+    
+except Exception as e:
+    NLP_ERROR_MESSAGE = f"Initialization error: {str(e)}"
+    print("\n" + "=" * 60)
+    print("✗ INITIALIZATION ERROR")
+    print("=" * 60)
+    print(f"Error details: {NLP_ERROR_MESSAGE}")
+    print(f"Error type: {type(e).__name__}")
+    import traceback
+    print("\nFull traceback:")
+    traceback.print_exc()
+    print("=" * 60)
+
 
 load_dotenv()
 
@@ -546,7 +621,13 @@ def generate_basic_analysis(conversation):
     report.append("=" * 80)
     report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     report.append("")
-    report.append("Note: Advanced analysis unavailable. Install textstat and nltk for detailed metrics.")
+    report.append("⚠️  NOTE: Advanced analysis unavailable.")
+    if NLP_ERROR_MESSAGE:
+        report.append(f"Error: {NLP_ERROR_MESSAGE}")
+    report.append("To enable full analysis, ensure textstat and nltk are installed:")
+    report.append("  pip install textstat nltk")
+    report.append("")
+    report.append("For debugging, visit: /debug/nlp on your server")
     report.append("")
     report.append("-" * 80)
     report.append("BASIC STATISTICS")
@@ -578,6 +659,52 @@ CORS(app)
 @app.route("/")
 def index():
     return redirect("/realtime")
+
+@app.route("/debug/nlp")
+def debug_nlp():
+    """Debug endpoint to check NLP package status"""
+    status = {
+        "analysis_available": ANALYSIS_AVAILABLE,
+        "error_message": NLP_ERROR_MESSAGE,
+        "packages": {}
+    }
+    
+    try:
+        import textstat
+        status["packages"]["textstat"] = textstat.__version__ if hasattr(textstat, '__version__') else "installed"
+    except ImportError:
+        status["packages"]["textstat"] = "NOT INSTALLED"
+    
+    try:
+        import nltk
+        status["packages"]["nltk"] = nltk.__version__
+        status["nltk_data_path"] = nltk.data.path
+        
+        # Check NLTK data
+        status["nltk_data"] = {}
+        try:
+            nltk.data.find('tokenizers/punkt')
+            status["nltk_data"]["punkt"] = "found"
+        except LookupError:
+            status["nltk_data"]["punkt"] = "MISSING"
+        
+        try:
+            nltk.data.find('corpora/stopwords')
+            status["nltk_data"]["stopwords"] = "found"
+        except LookupError:
+            status["nltk_data"]["stopwords"] = "MISSING"
+        
+        try:
+            nltk.data.find('taggers/averaged_perceptron_tagger')
+            status["nltk_data"]["pos_tagger"] = "found"
+        except LookupError:
+            status["nltk_data"]["pos_tagger"] = "MISSING"
+            
+    except ImportError:
+        status["packages"]["nltk"] = "NOT INSTALLED"
+    
+    return jsonify(status)
+
 
 @app.route("/session", methods=["POST"])
 def create_session():
