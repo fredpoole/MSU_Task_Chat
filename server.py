@@ -71,6 +71,7 @@ BOTS = [
             "and whether the food should be warmed up."
             "Offer butter or jam for the croissant, and a choice of spread for the bagel."
             "Be flexible and respond naturally to the learner's orders."
+			"If the accent or pronunciation or grammar is off ask for clarification"
         ),
         "constraints": (
             "Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
