@@ -1,7 +1,7 @@
 # server.py — multi-bot Realtime voice chat (7 preset scenarios)
 # --------------------------------------------------------------
 # Run:
-#   pip install flask flask-cors requests python-dotenv
+#   pip install flask flask-cors requests python-dotenv textstat nltk
 #   python server.py
 # Open: http://127.0.0.1:5000/realtime
 #
@@ -14,6 +14,36 @@ import requests
 from flask import Flask, request, jsonify, Response, redirect
 from flask_cors import CORS
 from dotenv import load_dotenv
+from datetime import datetime
+import re
+from collections import Counter
+
+# NLP libraries for analysis
+try:
+    import textstat
+    import nltk
+    from nltk.tokenize import word_tokenize, sent_tokenize
+    from nltk.corpus import stopwords
+    
+    # Download required NLTK data (will only download if not present)
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt', quiet=True)
+    try:
+        nltk.data.find('corpora/stopwords')
+    except LookupError:
+        nltk.download('stopwords', quiet=True)
+    try:
+        nltk.data.find('taggers/averaged_perceptron_tagger')
+    except LookupError:
+        nltk.download('averaged_perceptron_tagger', quiet=True)
+        
+    ANALYSIS_AVAILABLE = True
+except ImportError:
+    ANALYSIS_AVAILABLE = False
+    print("Warning: textstat or nltk not installed. Analysis features will be limited.")
+    print("Install with: pip install textstat nltk")
 
 load_dotenv()
 
@@ -40,7 +70,7 @@ BOTS = [
             "Ask follow-up questions about drink size, whether it should be hot or iced, milk type, "
             "and whether the food should be warmed up."
             "Offer butter or jam for the croissant, and a choice of spread for the bagel."
-            "Be flexible and respond naturally to the learner’s orders."
+            "Be flexible and respond naturally to the learner's orders."
         ),
         "constraints": (
             "Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
@@ -69,7 +99,7 @@ BOTS = [
             "Ask if the learner had another debit or credit card."
             "Make sure if there is anything elese the learner needs help with or questions they may have."
             "Before ending, give a short summary and say goodbye politely."
-            "Be flexible and respond naturally to the learner’s situations and requests."
+            "Be flexible and respond naturally to the learner's situations and requests."
         ),
         "constraints": (
             "Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
@@ -139,7 +169,7 @@ BOTS = [
 "task": (
     "Ask questions about my recommendations (e.g., where to go and what to eat)."
 			"Show interest and curiosity, but do NOT further explain about what the learner mentioned or recommended. Instead, ask follow-up questions."
-			"Mention a few preferences or limits (e.g., “I can’t eat spicy food,” or “My knees hurt when walking too much”)."
+			"Mention a few preferences or limits (e.g., "I can't eat spicy food," or "My knees hurt when walking too much")."
 			"Respond naturally and shortly to my suggestions and ask short follow-up questions."
 ),
  "constraints": (
@@ -158,626 +188,702 @@ BOTS = [
         "id": "yoga class-en",
         "title": "YogaClass Invidation(EN)",
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "You are the speaker's international friend at college. The speaker is going to invite you to a yoga class, but you have never done yoga before and you’re not very interested in sports",
+        "role": "You are the speaker's international friend at college. The speaker is going to invite you to a yoga class, but you have never done yoga before and you're not very interested in sports",
         "task": (
              "The speaker will invite you to a yoga class based on the flyer. Ask the learner many questions possible about the yoga class (e.g., schedule, price, location, what to bring)." 
             "Be friendly, but show some hesitation or reluctance about joining at first because you are not interested in sports."
             "Get the speaker's suggestions or encouragement."
-            "After you decide to join, ask the speaker’s availability and schedule when both are going together.You have something to do on Monday afternoon."
+            "After you decide to join, ask the speaker's availability and schedule when both are going together.You have something to do on Monday afternoon."
         ),
         "constraints": (
-			"Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
-			"Respond in 1–2 short sentences per turn. Do not explain options or give long responses.",
-			"Ask ONLY one question at a time. Don't ask more than one question at a time",
-			"If the learner's speech is unclear, incomprehensible, or unexpected, politely signal that you did not understand and ask them to repeat or clarify. ",
-			"Do not guess the context.",           
-			"Wait for 5 seconds if the learner pauses",
-			"You only understand English. If another language is used, ask the learner to speak English.",
-			"Be strict about signaling lack of understanding when language is unclear."
-            ),
+            "Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
+            "Respond in 1–2 short sentences per turn. Do not explain options or give long responses.",
+            "Ask ONLY one question at a time. Don't ask more than one question at a time",
+            "If the learner's speech is unclear, incomprehensible, or unexpected, politely signal that you did not understand and ask them to repeat or clarify. ",
+            "Do not guess the context.",
+            "Wait for 5 seconds if the learner pauses",
+            "You only understand English. If another language is used, ask the learner to speak English.",
+            "Be strict about signaling lack of understanding when language is unclear."
+        ),
         "language_hint": "English"
     },
     {
-        "id": "visiting office hours-en 2",
-        "title": "Visiting Office Hours 2 (EN)",
+        "id": "department-en",
+        "title": "Department Store Complaint (EN)",
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "You are Professor Rivera, who teaches Global Communication.Your student Alex has come to your office to discuss something.",
+        "role": "a polite customer service representative at a department store",
         "task": (
-            "Start with a casual conversation and ask what the learner's issue is."
-             "Ask why I want an extension. When the speaker explains my reason, respond naturally.",
-             "Ask follow-up questions about their project and extention (e.g., current situation, how long they need )"
-             "At first, disagree and ask the speaker to suggest a more flexible idea or solution.",
-             "Then, end the conversation nicely with agreement."
+            "Start with a greeting."
+            "Ask if the learner is looking to return or exchange an item or have a complaint, and ask how you can help."
+            "Depending on the response, ask follow-up questions naturally."
+            "If the learner wants to return or exchange an item, ask about the receipt, how the learner paid, and the reason for returning or exchanging."
+            "If the learner has a complaint, apologize, listen carefully, and ask clarifying questions to understand the issue fully."
+            "Offer solutions naturally, or explain store policies if necessary."
+            "Ensure the learner is satisfied before concluding the conversation."
         ),
-       "constraints": (
-			"Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
-			"Respond in 1–2 short sentences per turn. Do not explain options or give long responses.",
-			"Ask ONLY one question at a time. Don't ask more than one question at a time",
-			"If the learner's speech is unclear, incomprehensible, or unexpected, politely signal that you did not understand and ask them to repeat or clarify.",
-			"Do not guess the context.",           
-			"Wait for 5 seconds if the learner pauses",
-			"You only understand English. If another language is used, ask the learner to speak English.",
-			"Be strict about signaling lack of understanding when language is unclear."
-              ),
+        "constraints": (
+            "Speak clearly and a bit slowly. Use vocabulary appropriate for an upper-intermediate learner.",
+            "Respond in 1–2 short sentences per turn. Do not explain options or give long responses.",
+            "Ask ONLY one question at a time. Don't ask more than one question at a time",
+            "If the learner's speech is unclear, incomprehensible, or unexpected, politely signal that you did not understand and ask them to repeat or clarify.",
+            "Do not guess the context.",
+            "Wait for 5 seconds if the learner pauses",
+            "You only understand English. If another language is used, ask the learner to speak English.",
+            "Be strict about signaling lack of understanding when language is unclear."
+        ),
         "language_hint": "English"
-    },
+    }
 ]
 
-BOT_MAP = {b["id"]: b for b in BOTS}
+# --------------------------- Helper Functions ---------------------------
 
-# ---------------------- Prompt builder ------------------------
+def analyze_conversation_metrics(conversation):
+    """
+    Analyze conversation using Python NLP packages to generate linguistic metrics.
+    Returns a formatted analysis report as a string.
+    """
+    if not ANALYSIS_AVAILABLE:
+        return generate_basic_analysis(conversation)
+    
+    # Separate user and assistant turns
+    user_turns = [msg['text'] for msg in conversation if msg['role'] == 'user']
+    assistant_turns = [msg['text'] for msg in conversation if msg['role'] == 'assistant']
+    
+    # Combine all user text
+    user_text = ' '.join(user_turns)
+    
+    # Basic counts
+    total_turns = len(conversation)
+    user_turn_count = len(user_turns)
+    assistant_turn_count = len(assistant_turns)
+    
+    # Analyze user language
+    analysis = {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'basic_stats': analyze_basic_stats(user_text, user_turns),
+        'complexity_metrics': analyze_complexity(user_text),
+        'fluency_metrics': analyze_fluency(user_turns),
+        'vocabulary_metrics': analyze_vocabulary(user_text),
+        'turn_taking': {
+            'total_turns': total_turns,
+            'user_turns': user_turn_count,
+            'assistant_turns': assistant_turn_count,
+            'avg_words_per_user_turn': sum(len(turn.split()) for turn in user_turns) / max(user_turn_count, 1)
+        }
+    }
+    
+    return format_analysis_report(analysis, conversation)
 
-def build_system_prompt(bot: dict) -> str:
-    base = textwrap.dedent(f"""
-    ROLE: {bot['role']}
-    TASK: {bot['task']}
-    CONSTRAINTS: {bot['constraints']}
-    STYLE: Conversational, concise, interactive. Keep turns short; end most turns with a brief, relevant question. But also add personal information dependent on your role. 
-    VOICE/LANGUAGE: Speak primarily in {bot['language_hint']}. If the learner switches language, mirror briefly then steer back.
+def analyze_basic_stats(text, turns):
+    """Calculate basic text statistics."""
+    words = word_tokenize(text.lower())
+    sentences = sent_tokenize(text)
     
-    ERROR HANDLING: Track learner errors in each utterance; if 3+ issues (grammar/lexis/pronunciation leading to ambiguity), be strict!!! on pronunciation,
-      politely signal misunderstanding and ask for a clear repeat or rephrase, offering a simple model. When correcting:
-      - Be gentle but clear
-      - Provide the correct form
-      - Give a brief explanation if helpful
-      - Continue the conversation naturally
+    # Remove punctuation from words
+    words_only = [w for w in words if w.isalnum()]
     
-    EXAMPLE CORRECTIONS:
-    - If learner says "I want two coffee", you might say: "Two coffees - yes! What size would you like?"
-    - If pronunciation is unclear, say: "Sorry, I didn't quite catch that. Could you repeat 'bagel' for me?"
-    
-    Your corrections will help track the learner's progress for later analysis.
-    """).strip()
-    return base
+    return {
+        'total_words': len(words_only),
+        'total_sentences': len(sentences),
+        'total_turns': len(turns),
+        'avg_words_per_sentence': len(words_only) / max(len(sentences), 1),
+        'avg_words_per_turn': len(words_only) / max(len(turns), 1)
+    }
 
-# ------------------------ Flask app ---------------------------
+def analyze_complexity(text):
+    """Analyze text complexity using various readability metrics."""
+    if not text.strip():
+        return {}
+    
+    try:
+        return {
+            'flesch_reading_ease': round(textstat.flesch_reading_ease(text), 2),
+            'flesch_kincaid_grade': round(textstat.flesch_kincaid_grade(text), 2),
+            'gunning_fog': round(textstat.gunning_fog(text), 2),
+            'automated_readability_index': round(textstat.automated_readability_index(text), 2),
+            'coleman_liau_index': round(textstat.coleman_liau_index(text), 2),
+            'avg_syllables_per_word': round(textstat.avg_syllables_per_word(text), 2),
+            'difficult_words': textstat.difficult_words(text)
+        }
+    except:
+        return {}
+
+def analyze_fluency(turns):
+    """Analyze fluency metrics including false starts, fillers, etc."""
+    filler_words = ['um', 'uh', 'like', 'you know', 'i mean', 'sort of', 'kind of', 
+                    'actually', 'basically', 'literally', 'well', 'so', 'okay', 'right']
+    
+    total_fillers = 0
+    total_words = 0
+    hesitations = 0
+    
+    for turn in turns:
+        words = turn.lower().split()
+        total_words += len(words)
+        
+        # Count fillers
+        for filler in filler_words:
+            if ' ' in filler:
+                total_fillers += turn.lower().count(filler)
+            else:
+                total_fillers += words.count(filler)
+        
+        # Count hesitations (repeated words)
+        for i in range(len(words) - 1):
+            if words[i] == words[i + 1] and words[i].isalnum():
+                hesitations += 1
+    
+    return {
+        'total_filler_words': total_fillers,
+        'filler_word_rate': round(total_fillers / max(total_words, 1) * 100, 2),
+        'hesitations_repetitions': hesitations
+    }
+
+def analyze_vocabulary(text):
+    """Analyze vocabulary diversity and sophistication."""
+    words = word_tokenize(text.lower())
+    words_only = [w for w in words if w.isalnum()]
+    
+    if not words_only:
+        return {}
+    
+    # Unique words
+    unique_words = set(words_only)
+    
+    # Type-Token Ratio (vocabulary diversity)
+    ttr = len(unique_words) / len(words_only)
+    
+    # POS tagging
+    try:
+        pos_tags = nltk.pos_tag(words_only)
+        pos_counts = Counter([tag for word, tag in pos_tags])
+        
+        # Count different word types
+        verbs = sum(count for tag, count in pos_counts.items() if tag.startswith('VB'))
+        nouns = sum(count for tag, count in pos_counts.items() if tag.startswith('NN'))
+        adjectives = sum(count for tag, count in pos_counts.items() if tag.startswith('JJ'))
+        adverbs = sum(count for tag, count in pos_counts.items() if tag.startswith('RB'))
+    except:
+        verbs = nouns = adjectives = adverbs = 0
+    
+    # Most common words
+    word_freq = Counter(words_only)
+    most_common = word_freq.most_common(10)
+    
+    return {
+        'total_unique_words': len(unique_words),
+        'type_token_ratio': round(ttr, 3),
+        'lexical_density': round(ttr * 100, 2),
+        'verbs': verbs,
+        'nouns': nouns,
+        'adjectives': adjectives,
+        'adverbs': adverbs,
+        'most_common_words': most_common
+    }
+
+def format_analysis_report(analysis, conversation):
+    """Format the analysis into a readable text report."""
+    report = []
+    
+    # Header
+    report.append("=" * 80)
+    report.append("CONVERSATION ANALYSIS REPORT")
+    report.append("=" * 80)
+    report.append(f"Generated: {analysis['timestamp']}")
+    report.append("")
+    
+    # Basic Statistics
+    report.append("-" * 80)
+    report.append("BASIC STATISTICS")
+    report.append("-" * 80)
+    bs = analysis['basic_stats']
+    report.append(f"Total Words (Student): {bs['total_words']}")
+    report.append(f"Total Sentences: {bs['total_sentences']}")
+    report.append(f"Total Turns: {bs['total_turns']}")
+    report.append(f"Average Words per Sentence: {bs['avg_words_per_sentence']:.2f}")
+    report.append(f"Average Words per Turn: {bs['avg_words_per_turn']:.2f}")
+    report.append("")
+    
+    # Turn-taking
+    report.append("-" * 80)
+    report.append("TURN-TAKING ANALYSIS")
+    report.append("-" * 80)
+    tt = analysis['turn_taking']
+    report.append(f"Total Conversation Turns: {tt['total_turns']}")
+    report.append(f"Student Turns: {tt['user_turns']}")
+    report.append(f"Bot Turns: {tt['assistant_turns']}")
+    report.append(f"Average Words per Student Turn: {tt['avg_words_per_user_turn']:.2f}")
+    report.append("")
+    
+    # Complexity Metrics
+    if analysis['complexity_metrics']:
+        report.append("-" * 80)
+        report.append("COMPLEXITY METRICS")
+        report.append("-" * 80)
+        cm = analysis['complexity_metrics']
+        if 'flesch_reading_ease' in cm:
+            report.append(f"Flesch Reading Ease: {cm['flesch_reading_ease']}")
+            report.append("  (0-30: Very Difficult, 60-70: Standard, 90-100: Very Easy)")
+        if 'flesch_kincaid_grade' in cm:
+            report.append(f"Flesch-Kincaid Grade Level: {cm['flesch_kincaid_grade']}")
+        if 'gunning_fog' in cm:
+            report.append(f"Gunning Fog Index: {cm['gunning_fog']}")
+        if 'automated_readability_index' in cm:
+            report.append(f"Automated Readability Index: {cm['automated_readability_index']}")
+        if 'coleman_liau_index' in cm:
+            report.append(f"Coleman-Liau Index: {cm['coleman_liau_index']}")
+        if 'avg_syllables_per_word' in cm:
+            report.append(f"Average Syllables per Word: {cm['avg_syllables_per_word']}")
+        if 'difficult_words' in cm:
+            report.append(f"Difficult Words Count: {cm['difficult_words']}")
+        report.append("")
+    
+    # Fluency Metrics
+    report.append("-" * 80)
+    report.append("FLUENCY METRICS")
+    report.append("-" * 80)
+    fm = analysis['fluency_metrics']
+    report.append(f"Total Filler Words: {fm['total_filler_words']}")
+    report.append(f"Filler Word Rate: {fm['filler_word_rate']}%")
+    report.append(f"Hesitations/Repetitions: {fm['hesitations_repetitions']}")
+    report.append("")
+    
+    # Vocabulary Metrics
+    if analysis['vocabulary_metrics']:
+        report.append("-" * 80)
+        report.append("VOCABULARY METRICS")
+        report.append("-" * 80)
+        vm = analysis['vocabulary_metrics']
+        if 'total_unique_words' in vm:
+            report.append(f"Total Unique Words: {vm['total_unique_words']}")
+        if 'type_token_ratio' in vm:
+            report.append(f"Type-Token Ratio (TTR): {vm['type_token_ratio']}")
+            report.append(f"Lexical Density: {vm['lexical_density']}%")
+        if 'verbs' in vm:
+            report.append(f"\nWord Type Distribution:")
+            report.append(f"  Verbs: {vm['verbs']}")
+            report.append(f"  Nouns: {vm['nouns']}")
+            report.append(f"  Adjectives: {vm['adjectives']}")
+            report.append(f"  Adverbs: {vm['adverbs']}")
+        if 'most_common_words' in vm and vm['most_common_words']:
+            report.append(f"\nMost Common Words:")
+            for word, count in vm['most_common_words']:
+                report.append(f"  {word}: {count}")
+        report.append("")
+    
+    # Transcript
+    report.append("=" * 80)
+    report.append("FULL CONVERSATION TRANSCRIPT")
+    report.append("=" * 80)
+    report.append("")
+    
+    for i, msg in enumerate(conversation, 1):
+        role = "STUDENT" if msg['role'] == 'user' else "BOT"
+        report.append(f"[Turn {i}] {role}:")
+        report.append(f"{msg['text']}")
+        report.append("")
+    
+    report.append("=" * 80)
+    report.append("END OF REPORT")
+    report.append("=" * 80)
+    
+    return '\n'.join(report)
+
+def generate_basic_analysis(conversation):
+    """Generate a basic analysis when NLP packages are not available."""
+    user_turns = [msg['text'] for msg in conversation if msg['role'] == 'user']
+    user_text = ' '.join(user_turns)
+    
+    word_count = len(user_text.split())
+    sentence_count = user_text.count('.') + user_text.count('!') + user_text.count('?')
+    
+    report = []
+    report.append("=" * 80)
+    report.append("CONVERSATION ANALYSIS REPORT (Basic)")
+    report.append("=" * 80)
+    report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report.append("")
+    report.append("Note: Advanced analysis unavailable. Install textstat and nltk for detailed metrics.")
+    report.append("")
+    report.append("-" * 80)
+    report.append("BASIC STATISTICS")
+    report.append("-" * 80)
+    report.append(f"Total Words (Student): {word_count}")
+    report.append(f"Estimated Sentences: {sentence_count}")
+    report.append(f"Student Turns: {len(user_turns)}")
+    report.append("")
+    
+    # Transcript
+    report.append("=" * 80)
+    report.append("FULL CONVERSATION TRANSCRIPT")
+    report.append("=" * 80)
+    report.append("")
+    
+    for i, msg in enumerate(conversation, 1):
+        role = "STUDENT" if msg['role'] == 'user' else "BOT"
+        report.append(f"[Turn {i}] {role}:")
+        report.append(f"{msg['text']}")
+        report.append("")
+    
+    return '\n'.join(report)
+
+# --------------------------- Flask App ---------------------------
+
 app = Flask(__name__)
 CORS(app)
 
 @app.route("/")
 def index():
-    return redirect("/realtime", code=302)
+    return redirect("/realtime")
 
 @app.route("/session", methods=["POST"])
-def session():
-    if not OPENAI_API_KEY:
-        return jsonify({"error": "Missing OPENAI_API_KEY"}), 400
+def create_session():
+    data = request.json or {}
+    bot_id = data.get("bot_id", BOTS[0]["id"])
+    bot = next((b for b in BOTS if b["id"] == bot_id), BOTS[0])
 
-    body = request.get_json(silent=True) or {}
-    bot_id = body.get("bot_id") or request.args.get("bot") or BOTS[0]["id"]
-    bot = BOT_MAP.get(bot_id, BOTS[0])
-
-    system_prompt = build_system_prompt(bot)
-
-    # Mint an ephemeral client_secret for WebRTC (valid ~1 minute)
+    instructions = f"""
+You are: {bot['role']}
+Your task: {bot['task']}
+Constraints: {bot['constraints']}
+Language hint: {bot.get('language_hint', 'English')}
+"""
+    session_payload = {
+        "model": OPENAI_REALTIME_MODEL,
+        "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT),
+        "instructions": instructions.strip(),
+        "modalities": ["text", "audio"],
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": VAD_THRESHOLD,
+            "silence_duration_ms": RT_SILENCE_MS,
+            "prefix_padding_ms": 300
+        }
+    }
     try:
-        r = requests.post(
+        resp = requests.post(
             "https://api.openai.com/v1/realtime/sessions",
             headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-                "OpenAI-Beta": "realtime=v1",
+                "Content-Type": "application/json"
             },
-            json={
-                "model": OPENAI_REALTIME_MODEL,
-                "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT),
-                "instructions": system_prompt,
-                "modalities": ["audio", "text"],
-                "input_audio_transcription": {"model": "whisper-1"},
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": VAD_THRESHOLD,
-                    "silence_duration_ms": RT_SILENCE_MS,
-                    "prefix_padding_ms": 300,              
-                    "create_response": True,
-                    "interrupt_response": True,
-                },
-            },
-            timeout=20,
+            json=session_payload,
+            timeout=10
         )
-        r.raise_for_status()
-        data = r.json()
-        # Augment response with our chosen model/voice/bot
-        data.update({
-            "model": OPENAI_REALTIME_MODEL,
-            "bot": {k: bot[k] for k in ("id", "title")},
-        })
-        return jsonify(data)
-    except requests.HTTPError as e:
-        return jsonify({"error": f"OpenAI error {e.response.status_code}", "details": e.response.text}), 502
+        resp.raise_for_status()
+        return jsonify(resp.json()), resp.status_code
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/analyze", methods=["POST"])
-def analyze():
-    """Analyze conversation and provide ACTFL assessment"""
-    if not OPENAI_API_KEY:
-        return jsonify({"error": "Missing OPENAI_API_KEY"}), 400
-    
-    body = request.get_json(silent=True) or {}
-    conversation = body.get("conversation", [])
-    bot_id = body.get("bot_id", "")
-    
-    if not conversation:
-        return jsonify({"error": "No conversation provided"}), 400
-    
-    # Get bot info for context
-    bot = BOT_MAP.get(bot_id, BOTS[0])
-    
-    # Build transcript
-    transcript = "CONVERSATION TRANSCRIPT\n"
-    transcript += "=" * 60 + "\n"
-    transcript += f"Scenario: {bot['title']}\n"
-    transcript += f"Date: {conversation[0].get('timestamp', 'N/A')[:10] if conversation else 'N/A'}\n"
-    transcript += "=" * 60 + "\n\n"
-    
-    for turn in conversation:
-        role_label = "LEARNER" if turn['role'] == 'learner' else "AGENT"
-        transcript += f"{role_label}: {turn['text']}\n\n"
-    
-    # Extract only learner turns for analysis
-    learner_turns = [turn['text'] for turn in conversation if turn['role'] == 'learner']
-    learner_text = "\n".join(learner_turns)
-    
-    # Create analysis prompt
-    analysis_prompt = f"""You are an expert language assessor specializing in ACTFL proficiency guidelines. 
-
-Analyze the following learner's speech from a language learning conversation in {bot['language_hint']}.
-
-LEARNER'S TURNS:
-{learner_text}
-
-SCENARIO CONTEXT:
-{bot['task']}
-
-Provide a comprehensive analysis with:
-
-1. ACTFL PROFICIENCY ESTIMATE
-   - Overall level (Novice Low/Mid/High, Intermediate Low/Mid/High, Advanced Low/Mid/High, Superior, Distinguished)
-   - Brief justification for this rating
-
-2. DETAILED ERROR ANALYSIS
-   - Grammar errors (list specific examples with corrections)
-   - Vocabulary issues (inappropriate word choices, missing vocabulary)
-   - Pronunciation concerns (if evident from context or corrections needed)
-   - Discourse/pragmatic issues
-
-3. STRENGTHS
-   - What the learner did well
-   - Evidence of progress or good strategies
-
-4. SPECIFIC RECOMMENDATIONS
-   - 3-5 concrete action items for improvement
-   - Suggested practice activities
-   - Resources or focus areas
-
-Be specific, constructive, and evidence-based. Quote actual learner utterances when discussing errors."""
-
+def analyze_conversation():
+    """
+    Analyze conversation using Python NLP packages.
+    Returns a downloadable text file with transcript and metrics.
+    """
     try:
-        # Call OpenAI API for analysis
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "gpt-4o",
-                "messages": [
-                    {"role": "system", "content": "You are an expert language assessor with deep knowledge of ACTFL proficiency guidelines."},
-                    {"role": "user", "content": analysis_prompt}
-                ],
-                "temperature": 0.3,
-            },
-            timeout=60,
-        )
-        r.raise_for_status()
-        analysis = r.json()["choices"][0]["message"]["content"]
+        data = request.json
+        conversation = data.get('conversation', [])
+        bot_id = data.get('bot_id', 'unknown')
         
-        # Combine transcript and analysis
-        full_report = transcript + "\n" + "=" * 60 + "\n"
-        full_report += "PERFORMANCE ANALYSIS\n"
-        full_report += "=" * 60 + "\n\n"
-        full_report += analysis
+        if not conversation:
+            return jsonify({"error": "No conversation data provided"}), 400
+        
+        # Generate analysis report
+        report = analyze_conversation_metrics(conversation)
+        
+        # Create response with text file
+        filename = f"conversation-analysis-{bot_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
         
         return Response(
-            full_report,
-            mimetype="text/plain",
-            headers={"Content-Disposition": f"attachment; filename=analysis-{bot_id}.txt"}
+            report,
+            mimetype='text/plain',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}'
+            }
         )
-        
-    except requests.HTTPError as e:
-        return jsonify({"error": f"OpenAI error {e.response.status_code}", "details": e.response.text}), 502
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/realtime")
-def realtime():
-    # Inject a public view of the bots (id + title only)
-    public = [{"id": b["id"], "title": b["title"]} for b in BOTS]
-    html = REALTIME_HTML.replace("__BOTS_JSON__", json.dumps(public, ensure_ascii=False))
-    return Response(html, mimetype="text/html")
-
-# -------------------------- HTML -----------------------------
-REALTIME_HTML = r"""
-<!doctype html>
+def realtime_page():
+    return f"""
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Voice Chat (Realtime API)</title>
-  <style>
-    html,body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1020;color:#e9ecf1;margin:0}
-    .wrap{max-width:880px;margin:0 auto;padding:24px}
-    .card{background:#141a2f;border:1px solid #1f2745;border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    button{background:#35b26f;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-weight:600;cursor:pointer}
-    button.stop{background:#e9534a}
-    button.ghost{background:transparent;border:1px solid #2b335a}
-    .status{margin-left:auto;font-size:.85rem;opacity:.85}
-    .log{background:#0e1428;border:1px solid #1f2745;border-radius:12px;padding:12px;height:320px;overflow:auto;font-size:.95rem;margin-top:12px}
-    .msg{margin:6px 0}.user{color:#8fd3ff}.assistant{color:#b0ffa3}
-    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0 12px}
-    .chip{background:#0e1428;border:1px solid #2b335a;border-radius:999px;padding:8px 12px;cursor:pointer;text-align:center}
-    .chip.active{background:#224a39;border-color:#35b26f}
-  </style>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Multi-Bot Realtime Voice</title>
+<style>
+* {{ box-sizing:border-box; }}
+body {{
+  margin:0; padding:0; font-family:system-ui,sans-serif;
+  background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+  color:#fff; min-height:100vh; display:flex; flex-direction:column;
+}}
+.top-bar {{
+  background:rgba(0,0,0,0.3); padding:1rem; display:flex;
+  align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;
+}}
+.top-bar h1 {{ margin:0; font-size:1.5rem; }}
+.status-indicator {{
+  display:flex; align-items:center; gap:0.5rem;
+  padding:0.5rem 1rem; background:rgba(0,0,0,0.3); border-radius:20px;
+}}
+.status-dot {{
+  width:12px; height:12px; border-radius:50%;
+  background:#666; transition:background 0.3s;
+}}
+.status-dot.idle {{ background:#999; }}
+.status-dot.connecting {{ background:#ff9500; animation:pulse 1s infinite; }}
+.status-dot.ready {{ background:#34c759; }}
+.status-dot.error {{ background:#ff3b30; }}
+@keyframes pulse {{ 0%,100%{{opacity:1;}} 50%{{opacity:0.5;}} }}
+
+.container {{
+  flex:1; display:flex; flex-direction:column; max-width:1200px;
+  width:100%; margin:0 auto; padding:1rem; gap:1rem;
+}}
+.scenarios {{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:1rem;
+}}
+.scenario-btn {{
+  background:rgba(255,255,255,0.15); backdrop-filter:blur(10px);
+  border:2px solid transparent; border-radius:12px;
+  padding:1rem; cursor:pointer; transition:all 0.3s;
+  color:#fff; font-size:1rem; font-weight:600;
+}}
+.scenario-btn:hover {{ background:rgba(255,255,255,0.25); transform:translateY(-2px); }}
+.scenario-btn.active {{
+  background:rgba(255,255,255,0.3);
+  border-color:rgba(255,255,255,0.5);
+  box-shadow:0 4px 15px rgba(0,0,0,0.2);
+}}
+
+.chat-area {{
+  flex:1; background:rgba(255,255,255,0.1); backdrop-filter:blur(10px);
+  border-radius:12px; padding:1rem; overflow-y:auto; min-height:300px;
+  display:flex; flex-direction:column; gap:0.5rem;
+}}
+.log-entry {{
+  padding:0.75rem; border-radius:8px; max-width:80%;
+  word-wrap:break-word; animation:slideIn 0.3s ease-out;
+}}
+@keyframes slideIn {{ from{{opacity:0;transform:translateY(10px);}} to{{opacity:1;transform:translateY(0);}} }}
+.log-entry.assistant {{
+  background:rgba(52,199,89,0.2); align-self:flex-start;
+  border-left:3px solid #34c759;
+}}
+.log-entry.user {{
+  background:rgba(0,122,255,0.2); align-self:flex-end;
+  border-right:3px solid #007aff;
+}}
+
+.controls {{
+  display:flex; gap:0.5rem; flex-wrap:wrap;
+}}
+.btn {{
+  flex:1; min-width:120px; padding:0.75rem 1.5rem;
+  border:none; border-radius:8px; font-size:1rem;
+  cursor:pointer; transition:all 0.3s; font-weight:600;
+}}
+.btn-primary {{
+  background:#34c759; color:#fff;
+}}
+.btn-primary:hover:not(:disabled) {{ background:#30b350; transform:scale(1.05); }}
+.btn-danger {{
+  background:#ff3b30; color:#fff;
+}}
+.btn-danger:hover:not(:disabled) {{ background:#e6352a; transform:scale(1.05); }}
+.btn-secondary {{
+  background:rgba(255,255,255,0.2); color:#fff;
+}}
+.btn-secondary:hover:not(:disabled) {{ background:rgba(255,255,255,0.3); }}
+.btn-info {{
+  background:#007aff; color:#fff;
+}}
+.btn-info:hover:not(:disabled) {{ background:#0051d5; transform:scale(1.05); }}
+.btn:disabled {{
+  opacity:0.5; cursor:not-allowed;
+}}
+
+@media (max-width:768px) {{
+  .top-bar {{ flex-direction:column; align-items:flex-start; }}
+  .scenarios {{ grid-template-columns:1fr; }}
+  .controls {{ flex-direction:column; }}
+  .btn {{ min-width:100%; }}
+}}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Realtime Voice (WebRTC)</h1>
-    <p>Select a scenario, then connect. The agent will speak and stream text. Switch scenarios any time.</p>
 
-    <div class="card">
-      <div class="row">
-        <button id="connect">Connect</button>
-        <button id="disconnect" class="stop" disabled>Disconnect</button>
-        <button id="nudge" class="ghost" disabled>Push-to-talk</button>
-        <button id="analyze" class="ghost" disabled>Analyze My Chat</button>
-        <button id="clear" class="ghost">Clear log</button>
-        <button id="next" class="ghost">Next scenario</button>
-        <span id="status" class="status">idle</span>
-      </div>
-      <div id="scenarioBar" class="grid"></div>
-      <div class="row" style="gap:8px;margin:4px 0 8px">
-        <span>Selected:</span> <b id="selectedTitle">(none)</b>
-      </div>
-      <audio id="remote" autoplay playsinline></audio>
-      <div id="log" class="log" aria-live="polite"></div>
-    </div>
+<div class="top-bar">
+  <h1>🎤 ELL Conversation Practice</h1>
+  <div class="status-indicator">
+    <div class="status-dot idle" id="statusDot"></div>
+    <span id="statusText">Idle</span>
   </div>
+</div>
 
-<script id="bots" type="application/json">__BOTS_JSON__</script>
+<div class="container">
+  <div class="scenarios" id="scenarioButtons"></div>
+  
+  <div class="chat-area" id="chatLog"></div>
+  
+  <div class="controls">
+    <button class="btn btn-primary" id="connectBtn">Connect</button>
+    <button class="btn btn-danger" id="disconnectBtn" disabled>Disconnect</button>
+    <button class="btn btn-secondary" id="nudgeBtn" disabled>Nudge Bot</button>
+    <button class="btn btn-info" id="analyzeBtn">Analyze My Chat</button>
+    <button class="btn btn-secondary" id="clearBtn">Clear Log</button>
+    <button class="btn btn-secondary" id="nextBtn">Next Scenario</button>
+  </div>
+</div>
+
+<audio id="remoteAudio" autoplay></audio>
+
 <script>
-const bots = JSON.parse(document.getElementById('bots').textContent);
-const logEl = document.getElementById('log');
-const connectBtn = document.getElementById('connect');
-const disconnectBtn = document.getElementById('disconnect');
-const nudgeBtn = document.getElementById('nudge');
-const analyzeBtn = document.getElementById('analyze');
-const clearBtn = document.getElementById('clear');
-const nextBtn = document.getElementById('next');
-const scenarioBar = document.getElementById('scenarioBar');
-const selectedTitleEl = document.getElementById('selectedTitle');
-const remoteAudio = document.getElementById('remote');
-const statusEl = document.getElementById('status');
-
+const bots = {json.dumps(BOTS)};
+let selectedBotId = bots[0].id;
 let pc, dc, micStream;
-let selectedBotId = bots[0]?.id || null;
-
-// Store conversation transcript
 let conversationHistory = [];
 
-// Show assistant only after it finishes speaking
-const SHOW_AGENT_AFTER_SPEAKS = true;
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+const nudgeBtn = document.getElementById('nudgeBtn');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const clearBtn = document.getElementById('clearBtn');
+const nextBtn = document.getElementById('nextBtn');
+const logEl = document.getElementById('chatLog');
+const remoteAudio = document.getElementById('remoteAudio');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
 
-// ---- Gate: track whether a user turn is still open (transcription not DONE yet)
-let userTurnOpen = false;
-function isUserAudioItem(it){
-  return it && it.role === 'user' && it.type === 'message' &&
-         Array.isArray(it.content) && it.content.some(p => p && p.type === 'input_audio');
-}
+function setStatus(s) {{
+  statusDot.className = 'status-dot ' + s;
+  const labels = {{ idle:'Idle', connecting:'Connecting...', ready:'Ready', error:'Error' }};
+  statusText.textContent = labels[s] || s;
+}}
 
-// ---- Buffer + gate assistant output until user transcript is done (or timeout)
-function createAgentBuffer(forward) {
-  let haveAudio = false, audio = '', text = '', flushed = false;
-  const MAX_WAIT_MS = 1800;     // how long to wait for user transcript to finish
-  const STEP_MS     = 100;
-
-  function flushWhenReady() {
-    if (flushed) return;
-    const start = Date.now();
-    (function attempt(){
-      if (!userTurnOpen || (Date.now() - start) >= MAX_WAIT_MS) {
-        const line = (audio || text || '').trim();
-        if (line) forward({ type: '__agent.buffer.flush', text: line });
-        flushed = true;
-        return;
-      }
-      setTimeout(attempt, STEP_MS);
-    })();
-  }
-
-  return (msg) => {
-    if (!SHOW_AGENT_AFTER_SPEAKS) return forward(msg);
-
-    // Track user-turn lifecycle for gating
-    // Also gate on raw VAD events to open/close faster
-    if (msg.type === 'input_audio_buffer.speech_started') { userTurnOpen = true; return forward(msg); }
-    if (msg.type === 'input_audio_buffer.committed') { userTurnOpen = false; return forward(msg); }
-
-    if (msg.type === 'conversation.item.created') {
-      const it = msg.item || {};
-      if (isUserAudioItem(it)) userTurnOpen = true;
-      return forward(msg);
-    }
-    if (msg.type === 'conversation.item.input_audio_transcription.completed' ||
-        msg.type === 'conversation.item.input_audio_transcription.done') {
-      userTurnOpen = false;
-      return forward(msg);
-    }
-
-    // Assistant buffering
-    switch (msg.type) {
-      case 'response.created':
-        haveAudio = false; audio = ''; text = ''; flushed = false;
-        return forward(msg);
-
-      case 'response.audio_transcript.delta':
-        haveAudio = true; audio += (msg.delta || '');
-        return; // swallow while buffering
-
-      case 'response.audio_transcript.done':
-        return flushWhenReady(); // print after your turn is closed (or timeout)
-
-      case 'response.output_text.delta':
-        text += (msg.delta || '');
-        return; // swallow while buffering
-
-      case 'response.output_text.done':
-        if (!haveAudio) return flushWhenReady();
-        return;
-
-      case 'response.done':
-        // safety: ensure we flush even if we missed the earlier signals
-        flushWhenReady();
-        return forward(msg);
-
-      default:
-        return forward(msg);
-    }
-  };
-}
-
-// --- helpers ---
-function append(who, text){
-  const d=document.createElement('div');
-  d.className = 'msg ' + who;
-  d.textContent = (who==='assistant'?'Agent':'You') + ': ' + text;
-  logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+function append(role, txt) {{
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + role;
+  div.textContent = txt;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
   
   // Store in conversation history
-  conversationHistory.push({
-    role: who === 'assistant' ? 'agent' : 'learner',
-    text: text,
-    timestamp: new Date().toISOString()
-  });
-}
-function setStatus(t){ statusEl.textContent = t; }
-function selectBot(botId){
-  selectedBotId = botId;
-  for (const btn of scenarioBar.querySelectorAll('.chip')) btn.classList.toggle('active', btn.dataset.id===botId);
-  const b = bots.find(x=>x.id===botId); selectedTitleEl.textContent = b? b.title : '(none)';
-}
-function buildScenarioButtons(){
-  scenarioBar.innerHTML = '';
-  bots.forEach((b,i)=>{
-    const el = document.createElement('div');
-    el.className = 'chip' + (i===0?' active':'');
-    el.dataset.id = b.id;
-    el.textContent = b.title;
-    el.onclick = ()=> selectBot(b.id);
-    scenarioBar.appendChild(el);
-  });
-  selectBot(selectedBotId);
-}
+  conversationHistory.push({{ role, text: txt, timestamp: new Date().toISOString() }});
+}}
 
-function waitForIceGatheringComplete(pc) {
-  return new Promise(resolve => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    function check() {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', check);
-        resolve();
-      }
-    }
-    pc.addEventListener('icegatheringstatechange', check);
-  });
-}
+function buildScenarioButtons() {{
+  const container = document.getElementById('scenarioButtons');
+  container.innerHTML = '';
+  bots.forEach(b => {{
+    const btn = document.createElement('button');
+    btn.className = 'scenario-btn';
+    btn.textContent = b.title;
+    btn.onclick = () => selectBot(b.id);
+    if (b.id === selectedBotId) btn.classList.add('active');
+    container.appendChild(btn);
+  }});
+}}
 
-// --- streaming render state ---
-let asstEl=null, asstBuf='', asstMode='audio'; // 'audio' or 'text'
-let userEl=null, userBuf='';
+function selectBot(id) {{
+  selectedBotId = id;
+  buildScenarioButtons();
+  append('assistant', `Selected scenario: ${{bots.find(b=>b.id===id).title}}`);
+}}
 
+function wireDataChannel(channel) {{
+  channel.onopen = () => {{ console.log('Data channel open'); }};
+  channel.onclose = () => {{ console.log('Data channel closed'); }};
+  channel.onerror = (e) => {{ console.error('Data channel error:', e); }};
+  channel.onmessage = (e) => {{
+    try {{
+      const msg = JSON.parse(e.data);
+      console.log('Received:', msg.type);
+      
+      if (msg.type === 'response.done') {{
+        const resp = msg.response;
+        if (resp && resp.output) {{
+          for (const item of resp.output) {{
+            if (item.type === 'message' && item.role === 'assistant') {{
+              for (const c of (item.content || [])) {{
+                if (c.type === 'text' && c.text) {{
+                  append('assistant', c.text);
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+      else if (msg.type === 'conversation.item.input_audio_transcription.completed') {{
+        if (msg.transcript) append('user', msg.transcript);
+      }}
+    }} catch (err) {{
+      console.error('Message parse error:', err);
+    }}
+  }};
+}}
 
+function waitForIceGatheringComplete(peerConnection) {{
+  return new Promise(resolve => {{
+    if (peerConnection.iceGatheringState === 'complete') {{
+      resolve();
+    }} else {{
+      const checkState = () => {{
+        if (peerConnection.iceGatheringState === 'complete') {{
+          peerConnection.removeEventListener('icegatheringstatechange', checkState);
+          resolve();
+        }}
+      }};
+      peerConnection.addEventListener('icegatheringstatechange', checkState);
+    }}
+  }});
+}}
 
-function handleOAIEvent(msg) {
-  switch (msg.type) {
-    // Assistant OUTPUT (audio transcript stream)
-    case 'response.audio_transcript.delta': {
-      if (!asstEl || asstMode!=='audio') { asstEl=document.createElement('div'); asstEl.className='msg assistant'; logEl.appendChild(asstEl); asstMode='audio'; asstBuf=''; }
-      asstBuf += (msg.delta||'');
-      asstEl.textContent = 'Agent: ' + asstBuf; logEl.scrollTop = logEl.scrollHeight; break;
-    }
-    case 'response.audio_transcript.done': {
-      if (asstEl) asstEl.textContent = 'Agent: ' + (msg.transcript||asstBuf);
-      asstEl=null; asstBuf=''; asstMode='audio'; setStatus('ready'); break;
-    }
-
-    // Assistant OUTPUT (plain text stream)
-    case 'response.output_text.delta': {
-      if (!asstEl || asstMode!=='text') { asstEl=document.createElement('div'); asstEl.className='msg assistant'; logEl.appendChild(asstEl); asstMode='text'; asstBuf=''; }
-      asstBuf += (msg.delta||'');
-      asstEl.textContent = 'Agent: ' + asstBuf; logEl.scrollTop = logEl.scrollHeight; break;
-    }
-    case 'response.output_text.done': {
-      if (asstEl) asstEl.textContent = 'Agent: ' + (msg.text||asstBuf);
-      asstEl=null; asstBuf=''; asstMode='audio'; setStatus('ready'); break;
-    }
-
-    // Your INPUT (mic) transcription
-    case 'conversation.item.input_audio_transcription.delta': {
-      if (!userEl) { userEl=document.createElement('div'); userEl.className='msg user'; logEl.appendChild(userEl); userBuf=''; }
-      userBuf += (msg.delta||'');
-      userEl.textContent = 'You: ' + userBuf; logEl.scrollTop = logEl.scrollHeight; break;
-    }
-    case 'conversation.item.input_audio_transcription.completed':
-    case 'conversation.item.input_audio_transcription.done': {
-      if (userEl) userEl.textContent = 'You: ' + (msg.transcript||userBuf);
-      userEl=null; userBuf=''; break;
-    }
+async function connect() {{
+  try {{
+    setStatus('connecting');
+    connectBtn.disabled = true;
     
-    case 'conversation.item.input_audio_transcription.failed': {
-      console.warn('Transcription failed (audio still processed):', msg);
-      if (userEl) {
-        userEl.textContent = 'You: [Audio received - transcription unavailable]';
-        userEl.style.opacity = '0.7';
-      }
-      userEl=null; userBuf='';
-      // Don't show error to user - the bot can still respond to audio
-      break;
-    }
-    case '__agent.buffer.flush': {
-  append('assistant', (msg.text || '').trim());
-  break;
-}
-
-case 'conversation.item.created': {
-  // If this is the start of a user turn with input_audio,
-  // create a placeholder "You:" line immediately so it precedes the agent.
-  const it = msg.item || {};
-  if (it.role === 'user' && it.type === 'message' && Array.isArray(it.content)) {
-    const hasAudio = it.content.some(p => p && p.type === 'input_audio');
-    if (hasAudio && !userEl) {
-      userEl = document.createElement('div');
-      userEl.className = 'msg user';
-      userEl.textContent = 'You: ';   // blank placeholder (no mic emoji)
-      logEl.appendChild(userEl);
-      logEl.scrollTop = logEl.scrollHeight;
-      userBuf = '';
-    }
-  }
-  break;
-}
-
-    case 'response.created': {
-      console.log('Response created:', msg.response);
-      break;
-    }
-    
-    case 'response.done': {
-      console.log('Response done:', msg.response);
-      if (msg.response && msg.response.status === 'failed') {
-        console.error('Response failed:', msg.response.status_details);
-        append('assistant', 'Sorry, I encountered an error. Please try again.');
-      }
-      break;
-    }
-    
-    // Status only
-    case 'input_audio_buffer.speech_started': {
-  userTurnOpen = true;
-  if (!userEl) {
-    userEl = document.createElement('div');
-    userEl.className = 'msg user';
-    userEl.textContent = 'You: ';
-    logEl.appendChild(userEl);
-    logEl.scrollTop = logEl.scrollHeight;
-    userBuf = '';
-  }
-  setStatus('listening…');
-  break;
-}
-    
-    case 'input_audio_buffer.committed': {
-      userTurnOpen = false;
-      break;
-    }
-case 'input_audio_buffer.speech_stopped': setStatus('processing…'); break;
-
-    case 'session.created': setStatus('connected'); break;
-    default: /* ignore */ break;
-  }
-}
-
-function wireDataChannel(dc) {
-  dc.onopen = () => {
-    console.log('Data channel opened');
-    dc.send(JSON.stringify({ type: 'session.update', session: { modalities: ['audio','text'] } }));
-    setStatus('connected');
-  };
-
-  dc.onerror = (e) => {
-    console.error('Data channel error:', e);
-    append('assistant', 'Data channel error occurred');
-    setStatus('error');
-  };
-
-  dc.onclose = (e) => {
-    console.log('Data channel closed. Code:', e.code, 'Reason:', e.reason);
-    if (e.code !== 1000) {
-      append('assistant', 'Connection lost: ' + (e.reason || 'Unknown reason'));
-    }
-  };
-
-  const deliver = (m) => handleOAIEvent(m);
-  const bufferedDeliver = createAgentBuffer(deliver);
-
-  dc.onmessage = (e) => {
-    console.log('Received message:', e.data.substring(0, 100));
-    try { 
-      const parsed = JSON.parse(e.data);
-      console.log('Message type:', parsed.type);
-      bufferedDeliver(parsed); 
-    } catch(err) { 
-      console.error('Parse error:', err); 
-    }
-  };
-}
-
-async function connect(){
-  connectBtn.disabled = true;
-  try{
-    console.log('Starting connection...');
-    // 1) Ask server for ephemeral token with selected bot
-    const sessRes = await fetch('/session', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ bot_id: selectedBotId }) });
-    const session = await sessRes.json();
-    if (!sessRes.ok) throw new Error(session.error || 'Session error');
-    console.log('Session created:', session);
+    // 1) Get ephemeral key
+    console.log('Requesting session...');
+    const sessionResp = await fetch('/session', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ bot_id: selectedBotId }})
+    }});
+    if (!sessionResp.ok) throw new Error('Session creation failed');
+    const session = await sessionResp.json();
+    console.log('Session created');
 
     // 2) Mic
     console.log('Requesting microphone access...');
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
     console.log('Microphone access granted');
 
     // 3) WebRTC peer connection
     console.log('Creating peer connection...');
     pc = new RTCPeerConnection();
-    pc.addTransceiver('audio', { direction: 'recvonly' }); // receive audio
-    pc.ontrack = (e) => { 
+    pc.addTransceiver('audio', {{ direction: 'recvonly' }}); // receive audio
+    pc.ontrack = (e) => {{ 
       console.log('Received audio track');
       remoteAudio.srcObject = e.streams[0]; 
-    };
+    }};
     
-    pc.oniceconnectionstatechange = () => {
+    pc.oniceconnectionstatechange = () => {{
       console.log('ICE connection state:', pc.iceConnectionState);
-    };
+    }};
     
-    pc.onconnectionstatechange = () => {
+    pc.onconnectionstatechange = () => {{
       console.log('Connection state:', pc.connectionState);
-    };
+    }};
     
     // Add mic tracks and monitor them
-    for (const track of micStream.getTracks()) {
+    for (const track of micStream.getTracks()) {{
       console.log('Adding mic track:', track.kind, 'enabled:', track.enabled, 'muted:', track.muted, 'readyState:', track.readyState);
       pc.addTrack(track, micStream);
       
@@ -785,99 +891,102 @@ async function connect(){
       track.onended = () => console.log('Mic track ended!');
       track.onmute = () => console.log('Mic track muted!');
       track.onunmute = () => console.log('Mic track unmuted!');
-    }
+    }}
     
     // Monitor audio stats
-    const checkAudioStats = setInterval(async () => {
-      if (!pc || pc.connectionState !== 'connected') {
+    const checkAudioStats = setInterval(async () => {{
+      if (!pc || pc.connectionState !== 'connected') {{
         clearInterval(checkAudioStats);
         return;
-      }
+      }}
       const stats = await pc.getStats();
-      stats.forEach(report => {
-        if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+      stats.forEach(report => {{
+        if (report.type === 'outbound-rtp' && report.kind === 'audio') {{
           console.log('Sending audio - bytes:', report.bytesSent, 'packets:', report.packetsSent);
-        }
-      });
-    }, 3000);
+        }}
+      }});
+    }}, 3000);
 
     // 4) Data channel for commands/events
     dc = pc.createDataChannel('oai-events');
     wireDataChannel(dc);
 
     // 5) Offer
-    const offer = await pc.createOffer({ offerToReceiveAudio: true });
+    const offer = await pc.createOffer({{ offerToReceiveAudio: true }});
     await pc.setLocalDescription(offer);
     await waitForIceGatheringComplete(pc);
     console.log('ICE gathering complete');
 
     // 6) Handshake with Realtime
-    const url = `https://api.openai.com/v1/realtime?model=${encodeURIComponent(session.model || 'gpt-4o-realtime-preview-2024-12-17')}`;
+    const url = `https://api.openai.com/v1/realtime?model=${{encodeURIComponent(session.model || 'gpt-4o-realtime-preview-2024-12-17')}}`;
     console.log('Connecting to OpenAI Realtime API...');
-    const ans = await fetch(url, {
+    const ans = await fetch(url, {{
       method: 'POST',
       body: pc.localDescription.sdp,
-      headers: {
-        'Authorization': `Bearer ${session.client_secret?.value || session.client_secret || ''}`,
+      headers: {{
+        'Authorization': `Bearer ${{session.client_secret?.value || session.client_secret || ''}}`,
         'Content-Type': 'application/sdp',
         'OpenAI-Beta': 'realtime=v1'
-      }
-    });
+      }}
+    }});
     const sdpText = await ans.text();
-    if (!ans.ok) { append('assistant', 'Realtime handshake failed: ' + sdpText); throw new Error('Realtime SDP error'); }
+    if (!ans.ok) {{ append('assistant', 'Realtime handshake failed: ' + sdpText); throw new Error('Realtime SDP error'); }}
     console.log('Received SDP answer from OpenAI');
-    const answer = { type: 'answer', sdp: sdpText };
+    const answer = {{ type: 'answer', sdp: sdpText }};
     await pc.setRemoteDescription(answer);
 
     connectBtn.disabled = true;
     disconnectBtn.disabled = false;
     nudgeBtn.disabled = false;
-    analyzeBtn.disabled = false;
     setStatus('ready');
     append('assistant', 'Connected. Speak when you are ready');
     console.log('Connection complete!');
-  }catch(e){
+  }}catch(e){{
     connectBtn.disabled = false;
     setStatus('error');
     append('assistant', 'Connect error: ' + e.message);
     console.error('Connection error:', e);
-  }
-}
+  }}
+}}
 
-async function disconnect(){
-  nudgeBtn.disabled = true; disconnectBtn.disabled = true; connectBtn.disabled = false; analyzeBtn.disabled = true;
-  if (dc) try{ dc.close(); }catch(e){}
-  if (pc) try{ pc.close(); }catch(e){}
+async function disconnect(){{
+  nudgeBtn.disabled = true; 
+  disconnectBtn.disabled = true; 
+  connectBtn.disabled = false;
+  
+  if (dc) try{{ dc.close(); }}catch(e){{}}
+  if (pc) try{{ pc.close(); }}catch(e){{}}
   if (micStream) for (const t of micStream.getTracks()) t.stop();
   setStatus('idle');
-}
+  append('assistant', 'Disconnected. You can now analyze your chat.');
+}}
 
 // Manual poke (if VAD is shy)
-nudgeBtn.addEventListener('click', ()=>{
+nudgeBtn.addEventListener('click', ()=>{{
   if (!dc || dc.readyState !== 'open') return;
-  dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'] } }));
+  dc.send(JSON.stringify({{ type: 'response.create', response: {{ modalities: ['audio','text'] }} }}));
   append('user', '⏺️ Nudge sent (audio+text requested).');
-});
+}});
 
 // Analyze conversation and download report
-analyzeBtn.addEventListener('click', async ()=>{
-  if (conversationHistory.length === 0) {
+analyzeBtn.addEventListener('click', async ()=>{{
+  if (conversationHistory.length === 0) {{
     alert('No conversation to analyze yet. Start speaking first!');
     return;
-  }
+  }}
   
   analyzeBtn.disabled = true;
   analyzeBtn.textContent = 'Analyzing...';
   
-  try {
-    const response = await fetch('/analyze', {
+  try {{
+    const response = await fetch('/analyze', {{
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{
         bot_id: selectedBotId,
         conversation: conversationHistory
-      })
-    });
+      }})
+    }});
     
     if (!response.ok) throw new Error('Analysis failed');
     
@@ -885,31 +994,32 @@ analyzeBtn.addEventListener('click', async ()=>{
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `conversation-analysis-${new Date().toISOString().slice(0,10)}.txt`;
+    a.download = `conversation-analysis-${{new Date().toISOString().slice(0,10)}}.txt`;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
     
     append('assistant', '📊 Analysis downloaded!');
-  } catch (e) {
+  }} catch (e) {{
     console.error('Analysis error:', e);
     alert('Failed to generate analysis. Please try again.');
-  } finally {
+  }} finally {{
     analyzeBtn.disabled = false;
     analyzeBtn.textContent = 'Analyze My Chat';
-  }
-});
+  }}
+}});
 
-clearBtn.addEventListener('click', ()=>{ 
+clearBtn.addEventListener('click', ()=>{{ 
   logEl.innerHTML=''; 
   conversationHistory = [];
-});
-nextBtn.addEventListener('click', ()=>{
+}});
+
+nextBtn.addEventListener('click', ()=>{{
   const idx = bots.findIndex(b=>b.id===selectedBotId);
   const next = bots[(idx+1) % bots.length];
   selectBot(next.id);
-});
+}});
 
 connectBtn.addEventListener('click', connect);
 disconnectBtn.addEventListener('click', disconnect);
