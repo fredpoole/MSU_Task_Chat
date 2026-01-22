@@ -169,7 +169,7 @@ BOTS = [
 "task": (
     "Ask questions about my recommendations (e.g., where to go and what to eat)."
 			"Show interest and curiosity, but do NOT further explain about what the learner mentioned or recommended. Instead, ask follow-up questions."
-			"Mention a few preferences or limits (e.g., "I can't eat spicy food," or "My knees hurt when walking too much")."
+			"Mention a few preferences or limits (e.g., 'I can't eat spicy food,' or 'My knees hurt when walking too much')."
 			"Respond naturally and shortly to my suggestions and ask short follow-up questions."
 ),
  "constraints": (
