@@ -558,6 +558,9 @@ Language hint: {bot.get('language_hint', 'English')}
             "threshold": VAD_THRESHOLD,
             "silence_duration_ms": RT_SILENCE_MS,
             "prefix_padding_ms": 300
+        },
+        "input_audio_transcription": {
+            "model": "whisper-1"
         }
     }
     try:
@@ -803,15 +806,24 @@ function wireDataChannel(channel) {{
   channel.onmessage = (e) => {{
     try {{
       const msg = JSON.parse(e.data);
-      console.log('Received:', msg.type);
+      console.log('Received event:', msg.type);
       
-      if (msg.type === 'response.done') {{
+      // Handle user audio transcription
+      if (msg.type === 'conversation.item.input_audio_transcription.completed') {{
+        if (msg.transcript) {{
+          console.log('User transcript:', msg.transcript);
+          append('user', msg.transcript);
+        }}
+      }}
+      // Handle assistant text responses
+      else if (msg.type === 'response.done') {{
         const resp = msg.response;
         if (resp && resp.output) {{
           for (const item of resp.output) {{
             if (item.type === 'message' && item.role === 'assistant') {{
               for (const c of (item.content || [])) {{
                 if (c.type === 'text' && c.text) {{
+                  console.log('Assistant text:', c.text);
                   append('assistant', c.text);
                 }}
               }}
@@ -819,8 +831,16 @@ function wireDataChannel(channel) {{
           }}
         }}
       }}
-      else if (msg.type === 'conversation.item.input_audio_transcription.completed') {{
-        if (msg.transcript) append('user', msg.transcript);
+      // Handle assistant audio transcript
+      else if (msg.type === 'response.audio_transcript.done') {{
+        if (msg.transcript) {{
+          console.log('Assistant audio transcript:', msg.transcript);
+          append('assistant', msg.transcript);
+        }}
+      }}
+      // Log other events for debugging
+      else {{
+        console.log('Other event data:', JSON.stringify(msg).substring(0, 200));
       }}
     }} catch (err) {{
       console.error('Message parse error:', err);
