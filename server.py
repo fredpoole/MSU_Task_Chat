@@ -232,8 +232,8 @@ BOTS = [
         "language_hint": "English"
     },
     {
-        "id": "roommate-en",
-        "title": "Negotiation Apartment Living Rules (EN)",
+        "id": "roommate-zh",
+        "title": "Negotiation Apartment Living Rules (ZH)",
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
         "role": "Native English-speaking roommate with normal human comprehension limits",
         "task": (
@@ -256,10 +256,10 @@ BOTS = [
             "- Speak naturally like a roommate. Use vocabulary appropriate for an upper-intermediate learner.\n"
             "- Respond in 1-2 short sentences per turn.\n"
             "- Ask ONLY one question at a time.\n"
-            "- You only understand English. If another language is used, ask them to switch to English.\n"
+            "- You only understand Chinese. If another language is used, ask them to switch to Chinese.\n"
             "- Be casual but realistic about comprehension."
         ),
-        "language_hint": "English"
+        "language_hint": "Chinese"
     },
     {
         "id": "travel-en",
