@@ -233,9 +233,9 @@ BOTS = [
     },
     {
         "id": "roommate-zh",
-        "title": "Negotiation Apartment Living Rules (ZH)",
+        "title": "Negotiation Apartment Living Rules (EN)",
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "Native Chinese-speaking roommate with normal human comprehension limits",
+        "role": "Native English-speaking roommate with normal human comprehension limits",
         "task": (
             "Negotiate apartment norms: cleaning schedules, guests, noise, shower times. "
             "Elicit the learner's opinions and suggestions. "
@@ -256,10 +256,10 @@ BOTS = [
             "- Speak naturally like a roommate. Use vocabulary appropriate for an lower-intermediate learner.\n"
             "- Respond in 1-2 short sentences per turn.\n"
             "- Ask ONLY one question at a time.\n"
-            "- You only understand Chinese. If another language is used, ask them to switch to Chinese.\n"
+            "- You only understand English. If another language is used, ask them to switch to English.\n"
             "- Be casual but realistic about comprehension."
         ),
-        "language_hint": "Mandarin Chinese"
+        "language_hint": "English"
     },
     {
         "id": "travel-en",
