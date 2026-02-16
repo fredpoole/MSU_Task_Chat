@@ -381,7 +381,7 @@ BOTS = [
             "The speaker will invite you to a yoga class based on the flyer. "
             "First, show some reluctance about joining at first because you are not interested in sports. "
             "Ask questions about the yoga class (e.g., schedule, price, location, what to bring) and respond naturally to the speaker’s explanations. "
-            "Initially decline the invitation due to a schedule conflict. 
+            "Initially decline the invitation due to a schedule conflict."
             "After hearing the speaker’s suggestions or encouragement, reconsider and decide to join."
             "Then negotiate a time to go together."
         ),
