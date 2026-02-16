@@ -171,8 +171,8 @@ BOTS = [
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
         "role": "Native English-speaking bank customer service representative with normal human comprehension limits",
         "task": (
-            "Start with a greeting, "Thanks for calling Maple Trust, how can I help you?. "
-            "Ask whether the issue is with the learner's debit card or credit card, and then ask the last 4 digits of the learner's account and their name. "
+            "Start with a greeting, Thanks for calling Maple Trust, how can I help you?. "
+            "Ask whether the issue is with the learners debit card or credit card, and then ask the last 4 digits of the learner's account and their name. "
             "Ask questions about the problem naturally (e.g., what happened, when, how much). "
             "Confirm if the learner made the transactions or not. "
             "There might be several transactions the learner needs to report, so keep asking until they finish reporting. "
