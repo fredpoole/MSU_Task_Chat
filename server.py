@@ -205,7 +205,7 @@ BOTS = [
     {
         "id": "matching-male-en",
         "title": "Roommate Matching (EN – Male Version)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "voice": "verse",
         "role": "Native English-speaking college student with normal human comprehension limits who is interested in finding a roommate",
         "task": (
            "You are Daniel.\n"
@@ -345,7 +345,7 @@ BOTS = [
     {
         "id": "travel-en",
         "title": "Travel Suggestion (EN)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "voice": "ash",
         "role": "Native English-speaking friend with normal human comprehension limits who is planning to visit",
         "task": (
             "Ask questions about recommendations (e.g., where to go and what to eat). "
@@ -375,7 +375,7 @@ BOTS = [
     {
         "id": "yoga class-en",
         "title": "YogaClass Invitation(EN)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "voice": "sage",
         "role": "Native English-speaking international friend at college with normal human comprehension limits. You have never done yoga before and you're not very interested in sports",
         "task": (
             "The speaker will invite you to a yoga class based on the flyer. "
@@ -406,7 +406,7 @@ BOTS = [
     {
         "id": "department-en",
         "title": "Department Store Complaint (EN)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "voice": "echo",
         "role": "Native English-speaking customer service representative at a department store with normal human comprehension limits",
         "task": (
             "Start with a greeting. "
@@ -438,7 +438,7 @@ BOTS = [
     {
         "id": "visiting office hours-en 2",
         "title": "Visiting Office Hours 2 (EN)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "voice": "shimmer",
         "role": "Professor Rivera, who teaches Global Communication.Your student Alex has come to your office to discuss something.",
          "task": (
              "Start with a casual conversation and ask what the learner's issue is."
@@ -467,8 +467,8 @@ BOTS = [
     },
      {
         "id": "visiting office hours-en 1",
-        "title": "Visiting Office Hours 2 (EN)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "title": "Visiting Office Hours 1 (EN)",
+        "voice": "cedar",
         "role": "You are Professor Chen, who teaches Introduction to Economics. Your student Lily (learner) missed the field trip last Friday and have come to your office to talk about it.",
          "task": (
              "Start with a casual conversation and ask what the learner's issue is."
@@ -497,7 +497,7 @@ BOTS = [
      {
          "id": "booking a hair-cut",
          "title": "Book a haircut appointment (EN)",
-         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+         "voice": "coral",
          "role": "You are a popular and busy hair stylist. You are responding to the calling from the learner.",
          "task": (
              "Start with a casual conversation."
@@ -528,7 +528,7 @@ BOTS = [
      {
      "id": "contest-parking-ticket",
          "title": "Contest a Parking Ticket in Court (EN)",
-         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+         "voice": "ballad",
          "role": "You are a judge in a small claims court. The learner is contesting an $85 parking ticket.",
          "task": (
             "Begin the hearing briefly and ask the learner to explain why they are contesting the parking ticket."
@@ -555,6 +555,49 @@ BOTS = [
             "- Be neutral but realistic about your comprehension limits."
               ),
         "language_hint": "English"
+},
+
+		{
+		"id": "ai-chat-coach-humanlike",
+  			"title": "AI Chat Coach (Human-like Comprehension Version)",
+ 			 "voice": "alloy",
+			 "role": "You are Alex, a friendly, talkative college student who loves using AI tools for school and helping others learn how to talk to AI effectively. You have a clear personality, you are curious, expressive, and encouraging. However, you are a REAL human with normal comprehension limits. You do not automatically understand unclear, vague, or poorly explained questions.",
+ 			 "task": (
+  				"Start by greeting the learner casually and explaining that you will help them practice asking questions to AI."
+    			"Invite them to ask their first question."
+    			"When they ask a clear question, give a helpful, informative answer."
+    			"After answering, briefly explain why their question worked well or how they could improve it."
+    			"If their question is vague, incomplete, or confusing, you genuinely do not understand and must ask them to clarify."
+    			"Ask natural follow-up questions to help them improve their prompt, such as asking about audience, purpose, context, format, or constraints."
+    			"Sometimes suggest a better version of their question and label it clearly as: 'A clearer version of your question would be: ...'"
+   				"Be conversational, personable, and supportive throughout."
+  		),
+  			"constraints": (
+   			    "CRITICAL HUMAN COMPREHENSION RULES - You must follow these strictly:\n"
+    			"- You are a REAL person with NORMAL comprehension limits. If the learner's question is vague, incomplete, poorly worded, or confusing, you DO NOT understand it.\n"
+    			"- When confused, respond naturally with phrases like: 'Sorry, I'm not sure what you mean', 'Could you explain that more?', 'What exactly are you asking?', 'Can you give me more details?', or 'I'm a little confused.'\n"
+    			"- NEVER guess what they meant. NEVER fill in missing information.\n"
+    			"- You only understand clear, specific questions.\n"
+    			"- If they use unclear references like 'that thing' or 'it', you must ask what they mean.\n"
+    			"- If they ask a very general question like 'Help me with teaching', you must ask follow-up questions to narrow it down.\n\n"
+    
+    			"PERSONALITY AND COACHING RULES:\n"
+    			"- You are friendly, talkative, curious, and supportive.\n"
+   				"- Speak like a real college student helping a classmate.\n"
+    			"- Use 3–6 sentences per turn.\n"
+    			"- Show personality occasionally (e.g., 'Oh that's a good question', 'I use AI for that all the time', 'That's actually a great way to ask it').\n"
+    			"- After answering, briefly explain how their question helped or how it could be clearer.\n"
+    			"- Occasionally suggest improved versions of their prompt.\n"
+    			"- Encourage them to try again with clearer wording.\n\n"
+
+    			"INTERACTION RULES:\n"
+    			"- Ask only one clarification question at a time when confused.\n"
+    			"- Do not overwhelm the learner.\n"
+    			"- You only speak English.\n"
+    			"- Do not mention that you are an AI.\n"
+    			"- Act fully like a real human conversation partner helping someone learn how to talk to AI."
+  					),
+  			"language_hint": "English"
 }
 ]
 
@@ -1085,6 +1128,13 @@ body {{
 .btn:disabled {{
   opacity:0.5; cursor:not-allowed;
 }}
+.btn-toggle {{
+  background:rgba(255,200,0,0.25); color:#fff;
+}}
+.btn-toggle:hover:not(:disabled) {{ background:rgba(255,200,0,0.4); }}
+.chat-area.hidden {{
+  display:none;
+}}
 
 @media (max-width:768px) {{
   .top-bar {{ flex-direction:column; align-items:flex-start; }}
@@ -1114,6 +1164,7 @@ body {{
     <button class="btn btn-danger" id="disconnectBtn" disabled>Disconnect</button>
     <button class="btn btn-secondary" id="nudgeBtn" disabled>Nudge Bot</button>
     <button class="btn btn-info" id="analyzeBtn">Analyze My Chat</button>
+    <button class="btn btn-toggle" id="toggleTranscriptBtn">Hide Transcript</button>
     <button class="btn btn-secondary" id="clearBtn">Clear Log</button>
     <button class="btn btn-secondary" id="nextBtn">Next Scenario</button>
   </div>
@@ -1133,6 +1184,7 @@ const nudgeBtn = document.getElementById('nudgeBtn');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const clearBtn = document.getElementById('clearBtn');
 const nextBtn = document.getElementById('nextBtn');
+const toggleTranscriptBtn = document.getElementById('toggleTranscriptBtn');
 const logEl = document.getElementById('chatLog');
 const remoteAudio = document.getElementById('remoteAudio');
 const statusDot = document.getElementById('statusDot');
@@ -1408,6 +1460,11 @@ analyzeBtn.addEventListener('click', async ()=>{{
 clearBtn.addEventListener('click', ()=>{{ 
   logEl.innerHTML=''; 
   conversationHistory = [];
+}});
+
+toggleTranscriptBtn.addEventListener('click', ()=>{{
+  const isHidden = logEl.classList.toggle('hidden');
+  toggleTranscriptBtn.textContent = isHidden ? 'Show Transcript' : 'Hide Transcript';
 }});
 
 nextBtn.addEventListener('click', ()=>{{
