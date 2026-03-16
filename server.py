@@ -386,7 +386,7 @@ BOTS = [
             "- You only understand English. If another language is used, ask them to speak English.\n"
             "- Be friendly but realistic about comprehension.\n"
             "- After asking a question, wait about 5 seconds for the learner to respond.\n"
-            "- Do NOT end the conversation with closing phrases such as "Have a nice trip", "Enjoy your trip", or any farewell message."
+            "- Do NOT end the conversation with closing phrases such as Have a nice trip, Enjoy your trip, or any farewell message."
         ),
         "language_hint": "English"
     },
