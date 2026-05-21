@@ -1013,6 +1013,17 @@ Language hint: {bot.get('language_hint', 'English')}
             "model": OPENAI_REALTIME_MODEL,
             "instructions": instructions.strip(),
             "audio": {
+                "input": {
+                    "transcription": {
+                        "model": "whisper-1"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": VAD_THRESHOLD,
+                        "silence_duration_ms": RT_SILENCE_MS,
+                        "prefix_padding_ms": 300
+                    }
+                },
                 "output": {
                     "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT)
                 }
@@ -1300,8 +1311,8 @@ function wireDataChannel(channel) {{
           }}
         }}
       }}
-      // Handle assistant audio transcript
-      else if (msg.type === 'response.audio_transcript.done') {{
+      // Handle assistant audio transcript (GA: response.output_audio_transcript.done; beta: response.audio_transcript.done)
+      else if (msg.type === 'response.output_audio_transcript.done' || msg.type === 'response.audio_transcript.done') {{
         if (msg.transcript) {{
           console.log('Assistant audio transcript:', msg.transcript);
           append('assistant', msg.transcript);
