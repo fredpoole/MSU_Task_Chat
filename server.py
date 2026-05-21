@@ -124,7 +124,7 @@ load_dotenv()
 
 # --------------------------- Config ---------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
+OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
 OPENAI_REALTIME_VOICE_DEFAULT = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
 RT_SILENCE_MS = int(os.getenv("RT_SILENCE_MS", "1200"))  # pause after user stops
 VAD_THRESHOLD = float(os.getenv("RT_VAD_THRESHOLD", "0.5"))
@@ -1008,23 +1008,20 @@ Constraints: {bot['constraints']}
 Language hint: {bot.get('language_hint', 'English')}
 """
     session_payload = {
-        "model": OPENAI_REALTIME_MODEL,
-        "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT),
-        "instructions": instructions.strip(),
-        "modalities": ["text", "audio"],
-        "turn_detection": {
-            "type": "server_vad",
-            "threshold": VAD_THRESHOLD,
-            "silence_duration_ms": RT_SILENCE_MS,
-            "prefix_padding_ms": 300
-        },
-        "input_audio_transcription": {
-            "model": "whisper-1"
+        "session": {
+            "type": "realtime",
+            "model": OPENAI_REALTIME_MODEL,
+            "instructions": instructions.strip(),
+            "audio": {
+                "output": {
+                    "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT)
+                }
+            }
         }
     }
     try:
         resp = requests.post(
-            "https://api.openai.com/v1/realtime/sessions",
+            "https://api.openai.com/v1/realtime/client_secrets",
             headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "Content-Type": "application/json"
@@ -1032,9 +1029,13 @@ Language hint: {bot.get('language_hint', 'English')}
             json=session_payload,
             timeout=10
         )
+        if not resp.ok:
+            print(f"OpenAI session create error {resp.status_code}: {resp.text}")
         resp.raise_for_status()
         return jsonify(resp.json()), resp.status_code
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/analyze", methods=["POST"])
@@ -1406,15 +1407,14 @@ async function connect() {{
     console.log('ICE gathering complete');
 
     // 6) Handshake with Realtime
-    const url = `https://api.openai.com/v1/realtime?model=${{encodeURIComponent(session.model || 'gpt-4o-realtime-preview-2024-12-17')}}`;
+    const url = `https://api.openai.com/v1/realtime/calls`;
     console.log('Connecting to OpenAI Realtime API...');
     const ans = await fetch(url, {{
       method: 'POST',
       body: pc.localDescription.sdp,
       headers: {{
-        'Authorization': `Bearer ${{session.client_secret?.value || session.client_secret || ''}}`,
-        'Content-Type': 'application/sdp',
-        'OpenAI-Beta': 'realtime=v1'
+        'Authorization': `Bearer ${{session.value || session.client_secret?.value || session.client_secret || ''}}`,
+        'Content-Type': 'application/sdp'
       }}
     }});
     const sdpText = await ans.text();
