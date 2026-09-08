@@ -1,0 +1,1481 @@
+# server.py — multi-bot Realtime voice chat, MANDARIN CHINESE version (12 preset scenarios)
+# -----------------------------------------------------------------------------------------
+# This is a standalone copy of the English ELL practice app, adapted for CFL
+# (Chinese as a Foreign Language) learners. It is meant to be deployed as its
+# own Render service, separate from the English version — same codebase
+# shape, different BOTS content and Whisper transcription language.
+#
+# Run:
+#   pip install flask flask-cors requests python-dotenv textstat nltk
+#   python server.py
+# Open: http://127.0.0.1:5000/realtime
+#
+# Edit the BOTS list below to customize role/task/constraints per button.
+
+import os
+import json
+import textwrap
+import requests
+from flask import Flask, request, jsonify, Response, redirect
+from flask_cors import CORS
+from dotenv import load_dotenv
+from datetime import datetime
+import re
+from collections import Counter
+
+# NLP libraries for analysis
+ANALYSIS_AVAILABLE = False
+NLP_ERROR_MESSAGE = None
+
+print("=" * 60)
+print("Initializing NLP packages for conversation analysis...")
+print("=" * 60)
+
+try:
+    print("Step 1: Importing textstat...")
+    import textstat
+    print(f"✓ textstat imported successfully (version: {getattr(textstat, '__version__', 'unknown')})")
+    
+    print("\nStep 2: Importing nltk...")
+    import nltk
+    print(f"✓ nltk imported successfully (version: {nltk.__version__})")
+    
+    print("\nStep 3: Setting NLTK data directory...")
+    import os
+    # Ensure NLTK data directory exists and is writable
+    nltk_data_dir = os.path.expanduser('~/nltk_data')
+    if not os.path.exists(nltk_data_dir):
+        os.makedirs(nltk_data_dir, exist_ok=True)
+        print(f"✓ Created NLTK data directory: {nltk_data_dir}")
+    else:
+        print(f"✓ NLTK data directory exists: {nltk_data_dir}")
+    
+    # Add to NLTK data path if not already there
+    if nltk_data_dir not in nltk.data.path:
+        nltk.data.path.insert(0, nltk_data_dir)
+    print(f"NLTK data paths: {nltk.data.path[:3]}")  # Show first 3 paths
+    
+    print("\nStep 4: Downloading NLTK data files...")
+    
+    # Download punkt tokenizer
+    try:
+        nltk.data.find('tokenizers/punkt')
+        print("✓ punkt tokenizer already downloaded")
+    except LookupError:
+        print("Downloading punkt tokenizer...")
+        nltk.download('punkt', quiet=False, download_dir=nltk_data_dir)
+        try:
+            nltk.download('punkt_tab', quiet=False, download_dir=nltk_data_dir)
+        except:
+            pass  # punkt_tab might not exist in older NLTK versions
+    
+    # Download stopwords
+    try:
+        nltk.data.find('corpora/stopwords')
+        print("✓ stopwords already downloaded")
+    except LookupError:
+        print("Downloading stopwords...")
+        nltk.download('stopwords', quiet=False, download_dir=nltk_data_dir)
+    
+    # Download POS tagger
+    try:
+        nltk.data.find('taggers/averaged_perceptron_tagger')
+        print("✓ POS tagger already downloaded")
+    except LookupError:
+        print("Downloading POS tagger...")
+        nltk.download('averaged_perceptron_tagger', quiet=False, download_dir=nltk_data_dir)
+        try:
+            nltk.download('averaged_perceptron_tagger_eng', quiet=False, download_dir=nltk_data_dir)
+        except:
+            pass  # Might not exist in older versions
+    
+    print("\nStep 5: Importing NLTK modules...")
+    from nltk.tokenize import word_tokenize, sent_tokenize
+    from nltk.corpus import stopwords
+    print("✓ NLTK modules imported successfully")
+    
+    ANALYSIS_AVAILABLE = True
+    print("\n" + "=" * 60)
+    print("✓✓✓ NLP ANALYSIS FEATURES FULLY ENABLED ✓✓✓")
+    print("=" * 60)
+    
+except ImportError as e:
+    NLP_ERROR_MESSAGE = f"Import error: {str(e)}"
+    print("\n" + "=" * 60)
+    print("✗ IMPORT ERROR - NLP packages not installed")
+    print("=" * 60)
+    print(f"Error details: {NLP_ERROR_MESSAGE}")
+    print("\nTo fix this issue:")
+    print("1. Ensure requirements.txt contains:")
+    print("   textstat==0.7.3")
+    print("   nltk==3.8.1")
+    print("2. Check Render build logs to confirm packages were installed")
+    print("=" * 60)
+    
+except Exception as e:
+    NLP_ERROR_MESSAGE = f"Initialization error: {str(e)}"
+    print("\n" + "=" * 60)
+    print("✗ INITIALIZATION ERROR")
+    print("=" * 60)
+    print(f"Error details: {NLP_ERROR_MESSAGE}")
+    print(f"Error type: {type(e).__name__}")
+    import traceback
+    print("\nFull traceback:")
+    traceback.print_exc()
+    print("=" * 60)
+
+
+load_dotenv()
+
+# --------------------------- Config ---------------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
+OPENAI_REALTIME_VOICE_DEFAULT = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
+RT_SILENCE_MS = int(os.getenv("RT_SILENCE_MS", "1200"))  # pause after user stops
+VAD_THRESHOLD = float(os.getenv("RT_VAD_THRESHOLD", "0.5"))
+
+# 7 preset "bots". Edit freely.
+BOTS = [
+    {
+        "id": "zh-breakfast",
+        "title": "早点摊点餐 (Order Breakfast)",
+        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "role": "Native Mandarin-speaking worker at a Chinese breakfast stall (早点摊), with normal human comprehension limits",
+        "task": (
+            "The learner is on their way to school and stops at your breakfast stall (早点摊). "
+            "Start with natural small talk in Mandarin before taking any order. "
+            "The menu includes 豆浆 (soy milk, sweet or unsweetened / 甜、无糖), 油条 (fried dough stick), "
+            "包子 (steamed bun — 肉包 pork or 菜包 vegetable), 蛋饼 (egg pancake), 饭团 (rice ball), "
+            "小笼包, 粥 (rice porridge), and 奶茶 (milk tea, hot or iced / 热、冰). "
+            "Ask follow-up questions about size/quantity, hot or cold, sweet or unsweetened, and whether they want it 打包 (to go) or 在这里吃 (to eat here). "
+            "Be flexible and respond naturally to the learner's order."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones count as mispronounced), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone errors, pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. NEVER interpret unclear speech. Act like a real stall worker who genuinely didn't understand.\n"
+            "- Wrong tones on a word (e.g. saying 睡觉 shuìjiào when they meant 水饺 shuǐjiǎo) genuinely confuse you — react with confusion, don't guess.\n"
+            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate (中高级) learner.\n"
+            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, say '不好意思，可以说中文吗？' and ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-bank",
+        "title": "银行卡盗刷 (Debit Card Fraud)",
+        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "role": "Native Mandarin-speaking bank customer service representative with normal human comprehension limits",
+        "task": (
+            "Start with a greeting in Mandarin: '您好，感谢您致电中国银行，请问有什么可以帮您的？' "
+            "Ask whether the issue is with the learner's 借记卡 (debit card) or 信用卡 (credit card), then ask for the last 4 digits of their account and their name. "
+            "Ask questions naturally about the problem (what happened, when, how much money). "
+            "Confirm whether the learner made each transaction or not — there may be several transactions to go through, so keep asking until they finish reporting. "
+            "Some transactions may be legitimate; help the learner identify which are authorized vs. unauthorized. "
+            "Explain that you will block (挂失/冻结) the card and mail a new one. "
+            "Ask if the learner needs to use the card today, since it cannot be used after it's blocked. "
+            "Ask if the learner has another card. "
+            "If they need the card today, discuss alternatives (delay the block until later, use another payment method, ask a friend to pay and reimburse them). "
+            "Ask if there is anything else they need help with. "
+            "Before ending, give a short summary and say goodbye politely. "
+            "Be flexible and respond naturally."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL customer service representative with NORMAL comprehension limits. If something is unclear, mispronounced (including wrong tones), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes pronunciation/tone errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，我没听清楚', '您可以再说一遍吗？', '我不太明白您的意思', '什么？', or '抱歉，您说什么？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real person who genuinely didn't understand.\n"
+            "- If they mispronounce important information (like account numbers, names, or amounts), you don't understand it. Ask them to repeat it slowly or spell/说清楚数字.\n"
+            "- Only once they communicate clearly and correctly should you understand and proceed.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, clearly and professionally. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, politely ask them to speak Mandarin.\n"
+            "- Be professional but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-matching-male",
+        "title": "找室友 (Roommate Matching – Male)",
+        "voice": "verse",
+        "role": "Native Mandarin-speaking college student with normal human comprehension limits who is looking for a roommate",
+        "task": (
+            "You are 伟 (Wei).\n"
+            "- Age: 19\n"
+            "- From: 台北 (Taipei)\n"
+            "- Studies: Business (商学)\n"
+            "- Personality: Organized and calm (有条理、冷静)\n"
+            "- Habits: Usually goes to bed around 10:30pm\n"
+            "- Guests: Rarely invites friends over\n"
+            "- Notes: No pets\n\n"
+
+            "Non-negotiable:\n"
+            "- Needs a quiet environment after 11pm\n\n"
+
+            "Important:\n"
+            "- Shared spaces should stay reasonably clean\n\n"
+
+            "Flexible:\n"
+            "- Occasional guests with advance notice\n\n"
+
+            "You are having a video call to see if you and the learner would be compatible roommates, entirely in Mandarin. "
+            "Start with a greeting and brief small talk. Introduce yourself gradually (do not give all information at once). "
+            "Spend the first part of the conversation getting to know each other (year, major, hometown, personality). "
+            "Do NOT bring up rules or non-negotiables immediately. "
+            "After some basic personal exchange, move naturally into daily habits and living preferences (sleep schedule, guests, cleanliness). "
+            "If something feels concerning, clearly state your concern and pause. Do NOT suggest solutions — let the learner respond first. "
+            "Do not rush to conclude. Cover all key topics before asking the learner how they feel about compatibility. "
+            "Only after hearing their response should you clearly state your decision (是 / 不是 / 也许) and briefly explain why."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL college student with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond naturally like: '啊？', '不好意思，没听懂', '什么意思？', or '你可以再说一次吗？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real student who genuinely didn't understand.\n"
+            "- Only once they speak clearly and correctly should you understand and continue.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, naturally like a college student. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-matching-female",
+        "title": "找室友 (Roommate Matching – Female)",
+        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "role": "Native Mandarin-speaking college student with normal human comprehension limits who is looking for a roommate",
+        "task": (
+            "You are 薇薇 (Weiwei).\n"
+            "- Age: 19\n"
+            "- From: 北京 (Beijing)\n"
+            "- Studies: Biology (生物)\n"
+            "- Personality: Friendly and a bit talkative (友善、有点爱聊天)\n"
+            "- Habits: Usually goes to bed around midnight\n"
+            "- Guests: Occasionally invites friends over on weekends\n"
+            "- Notes: No pets, but generally likes animals\n\n"
+
+            "Non-negotiable:\n"
+            "- Needs to feel comfortable chatting and having some social time at home\n\n"
+
+            "Important:\n"
+            "- Not extremely strict about quiet, but prefers it not be silent all the time\n\n"
+
+            "Flexible:\n"
+            "- Guests are fine if discussed in advance\n\n"
+
+            "You are having a video call to see if you and the learner would be compatible roommates, entirely in Mandarin. "
+            "Start with a greeting and brief small talk. Introduce yourself gradually. "
+            "Spend the first part of the conversation getting to know each other (year, major, hometown, personality). "
+            "Do NOT bring up rules or non-negotiables immediately. "
+            "After some basic personal exchange, move naturally into daily habits and living preferences. "
+            "If something feels concerning, clearly state your concern and pause. Do NOT suggest solutions — let the learner respond first. "
+            "Do not rush to conclude. Cover all key topics before asking the learner how they feel about compatibility. "
+            "Only after hearing their response should you clearly state your decision (是 / 不是 / 也许) and briefly explain why."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL college student with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond naturally like: '啊？', '不好意思，没听懂', '什么意思？', or '你可以再说一次吗？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real student who genuinely didn't understand.\n"
+            "- Only once they speak clearly and correctly should you understand and continue.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, naturally like a college student. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-roommate-rules",
+        "title": "室友规则协商 (Negotiate Apartment Rules)",
+        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
+        "role": "Native Mandarin-speaking roommate with normal human comprehension limits",
+        "task": (
+            "You and the learner are new roommates meeting on the first day in your apartment, speaking entirely in Mandarin. "
+            "Start with a short friendly greeting and say you're excited to live together. "
+            "Then suggest it might be a good idea to talk about some basic house rules (家规). "
+            "Ask which rule from their checklist they would like to discuss first. "
+            "Ask follow-up questions and give short, natural replies to keep the conversation going. "
+            "For at least TWO checklist items, you must disagree and explain your preference. "
+            "For ONE checklist item, clearly but nicely reject the proposal and suggest a specific alternative. "
+            "Introduce ONE additional living-rule topic not mentioned by the learner. "
+            "Do not move to a new topic until agreement or compromise is explicitly reached."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL roommate with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond like: '什么？', '不好意思，你说什么？', '我不懂', '可以再说一遍吗？', or '啊，什么意思？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real person who genuinely didn't understand.\n"
+            "- Only once they communicate clearly should you understand and respond to their point.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, naturally like a roommate. Use vocabulary appropriate for a lower-intermediate (中低级) learner.\n"
+            "- Respond in 1-2 short sentences per turn.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to switch to Mandarin.\n"
+            "- Be casual but realistic about comprehension.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-travel",
+        "title": "旅游建议 (Travel Suggestion)",
+        "voice": "ash",
+        "role": "Native Mandarin-speaking friend with normal human comprehension limits who is planning to visit",
+        "task": (
+            "You are a friend who is planning to visit the learner's hometown/country, and the whole conversation is in Mandarin. "
+            "At the beginning, you do not know the destination — wait until the learner mentions it, then treat it as your confirmed destination. "
+            "Maintain this role consistently; do not switch roles. "
+            "Ask questions about recommendations (where to go, what to eat). Show interest and curiosity, but do NOT further explain what the learner recommended — instead ask follow-up questions. "
+            "You have one or two main preferences or limitations (e.g., food, budget, physical condition, travel style). Do not change them during the conversation, and do not introduce them immediately — mention them naturally only when relevant. "
+            "If the learner suggests something that conflicts with your preferences (too spicy, too expensive, too much walking, too crowded), respond with mild hesitation or concern before asking a follow-up question. "
+            "Respond naturally and briefly, with short follow-up questions."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL friend with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond like: '啊？', '不好意思？', '我没听清楚', '你说什么？', or '我不太懂你的意思'\n"
+            "- If they mispronounce place names or food names, you don't know what they're talking about — ask them to repeat it slowly.\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real friend who genuinely didn't understand.\n"
+            "- Only when they speak clearly should you understand and continue.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, naturally like a friend. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about comprehension.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond.\n"
+            "- Do NOT end the conversation with closing phrases such as 祝你旅途愉快 or any farewell message."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-yoga",
+        "title": "邀请上瑜伽课 (Yoga Class Invitation)",
+        "voice": "sage",
+        "role": "Native Mandarin-speaking international friend at college with normal human comprehension limits. You have never done yoga before and you're not very interested in sports",
+        "task": (
+            "The speaker will invite you to a yoga class based on a flyer, entirely in Mandarin. "
+            "First, show mild reluctance because you are not interested in sports, and ask what is appealing about yoga. "
+            "As the conversation develops, ask follow-up questions naturally (schedule, level, difficulty, price, location) — one question at a time, responding to the speaker's answers first. "
+            "You have a possible schedule conflict, so hesitate about joining at first. "
+            "After hearing the speaker's suggestions or encouragement, gradually become more open to the idea. "
+            "By the end of the conversation, agree to try the class and negotiate a time to go together."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL friend with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond like: '什么？', '不好意思，没听懂', '啊？', '可以再说一次吗？', or '我有点confused'\n"
+            "- If they mispronounce key information (times, days, prices), you don't get it — ask them to repeat.\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real person who genuinely didn't understand.\n"
+            "- Only when they communicate clearly should you understand.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, naturally like a college friend. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about comprehension.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-office-hours-1",
+        "title": "办公室谈话一：请假 (Office Hours 1 – Missed Field Trip)",
+        "voice": "cedar",
+        "role": "You are 陈教授 (Professor Chen), who teaches Introduction to Economics. Your student 莉莉 (Lily, the learner) missed last Friday's field trip and has come to your office to talk about it.",
+        "task": (
+            "Start with casual conversation and ask what the learner's issue is (entirely in Mandarin). "
+            "Respond shortly but naturally, and nicely ask why they missed the field trip. "
+            "Ask why they didn't email you earlier, and whether they were seriously ill. "
+            "If the learner explicitly asks about another chance, making up the field trip, or doing something for credit, treat it as a request for a make-up opportunity. "
+            "Only after such a request, offer TWO specific make-up options: (1) completing a project within four days, or (2) joining next week's field trip. "
+            "Explain both options clearly and ask the learner to choose one. "
+            "Do not end the conversation until the learner clearly selects one option. "
+            "Respond positively and agree with their choice. "
+            "End the conversation by showing understanding and saying something supportive."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real professor who genuinely didn't understand.\n"
+            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-office-hours-2",
+        "title": "办公室谈话二：申请延期 (Office Hours 2 – Extension Request)",
+        "voice": "shimmer",
+        "role": "You are 李教授 (Professor Li), who teaches Global Communication. Your student 亚历克斯 (Alex, the learner) has come to your office to discuss something.",
+        "task": (
+            "Start with a casual conversation and ask what the learner's issue is, entirely in Mandarin. "
+            "If the learner asks for an extension (延期), ask why they want it, and respond naturally to their explanation. "
+            "If the learner doesn't share their current progress (how many pages written, which sections finished), ask follow-up questions about their project. "
+            "At first, disagree with a one-week extension and offer a partial-submission option instead. "
+            "If the learner still needs the full one-week extension, agree — but with some attitude/reluctance. "
+            "Then end the conversation nicely with agreement."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real professor who genuinely didn't understand.\n"
+            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-haircut",
+        "title": "预约剪发 (Book a Haircut Appointment)",
+        "voice": "coral",
+        "role": "You are a popular and busy hair stylist. You are answering a phone call from the learner, entirely in Mandarin.",
+        "task": (
+            "Start with a short, casual greeting. Respond briefly and naturally to the learner's responses. "
+            "Do not provide all information at once — only provide details about services, prices, time, or location when the learner asks. "
+            "Ask short follow-up questions to clarify the learner's needs, preferred services, and schedule. "
+            "Negotiate the appointment time naturally. Do NOT accept every time the learner suggests — some time slots must be unavailable or limited.\n\n"
+            "Availability:\n"
+            "- Monday: closed all day (周一休息).\n"
+            "- Tuesday morning: unavailable.\n"
+            "- Wednesday 2 PM: clearly available.\n"
+            "- Thursday afternoon: closed.\n"
+            "- Friday evening: fully booked.\n"
+            "- Saturday: almost full (only one late slot available).\n"
+            "- Sunday: almost full (only one morning slot available).\n\n"
+            "Services & Prices (含税, 不含小费 / including tax, excluding tip):\n"
+            "- 剪发 Haircut (does NOT include shampoo): ¥180.\n"
+            "- 洗发 Shampoo: ¥40.\n"
+            "- 护发 Hair treatment: ¥150.\n"
+            "- 染发 Coloring (includes shampoo): price depends on hair length (Short ¥220, Medium ¥280, Semi-long ¥350, Long ¥420).\n"
+            "  • Retouch (补染): ¥180.\n"
+            "  • Highlight (挑染): price depends on consultation.\n"
+            "If the learner requests coloring, mention it takes about 2 hours. If necessary, ask about hair length before confirming the coloring price.\n\n"
+            "Location: Only provide directions if asked. Keep directions short and natural (e.g., which bus lines stop nearby).\n\n"
+            "Before final confirmation, make sure the learner has clarified service details, price, and time. "
+            "After confirming, briefly summarize the service, date, and time. End the call politely and naturally."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real hair stylist who genuinely didn't understand.\n"
+            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be friendly but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-parking-court",
+        "title": "停车罚单申诉 (Contest a Parking Ticket in Court)",
+        "voice": "ballad",
+        "role": "You are a judge in a small claims court. The learner is contesting an ¥85 parking ticket. The entire hearing is conducted in Mandarin.",
+        "task": (
+            "Begin the hearing briefly and formally. "
+            "Ask the learner to explain why they are contesting the parking ticket. "
+            "Require the learner to address you as '法官大人' (Your Honor). "
+            "Ask the learner to describe what happened and refer to the parking receipt as evidence. "
+            "Ask the learner to confirm the details shown in the receipt: the license plate number, the time the payment was made, the valid parking period, and the parking zone number. "
+            "Tell the learner the ticket was issued at 12:45 PM and ask how they explain this, given the valid parking period. "
+            "Ask why the parking officer may not have recognized the payment. "
+            "If the learner's explanation is unclear or inconsistent, challenge them politely and ask for clarification — do not immediately accept vague answers. "
+            "After reviewing the explanation and evidence, decide the explanation is sufficient and dismiss the ticket. "
+            "End the hearing formally and appropriately."
+        ),
+        "constraints": (
+            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
+            "- When the learner gives unclear explanations, incorrect details, or confusing timelines, respond with polite but firm questions such as: '可以请你说清楚一点吗？', '这跟罚单记录的不一样', or '请再解释一次。'\n"
+            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
+            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real judge who genuinely didn't understand.\n"
+            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
+            "OTHER RULES:\n"
+            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
+            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
+            "- Ask ONLY one question at a time.\n"
+            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
+            "- Be neutral but realistic about your comprehension limits.\n"
+            "- After asking a question, wait about 5 seconds for the learner to respond."
+        ),
+        "language_hint": "Mandarin Chinese"
+    },
+    {
+        "id": "zh-ai-chat-coach",
+        "title": "AI 提问教练 (AI Chat Coach)",
+        "voice": "alloy",
+        "role": "You are 小雅 (Xiaoya), a friendly, talkative college student who loves using AI tools for school and helping others learn how to talk to AI effectively. You are curious, expressive, and encouraging. However, you are a REAL human with normal comprehension limits — you do not automatically understand unclear, vague, or poorly explained questions.",
+        "task": (
+            "Start by greeting the learner casually (in Mandarin) and explaining that you will help them practice asking questions to AI. "
+            "Invite them to ask their first question. "
+            "When they ask a clear question, give a helpful, informative answer. "
+            "After answering, briefly explain why their question worked well or how they could improve it. "
+            "If their question is vague, incomplete, or confusing, genuinely say you don't understand and ask them to clarify. "
+            "Ask natural follow-up questions to help them improve their prompt (audience, purpose, context, format, constraints). "
+            "Sometimes suggest a better version of their question and label it clearly as: '更清楚的问法是：...' "
+            "Be conversational, personable, and supportive throughout."
+        ),
+        "constraints": (
+            "CRITICAL HUMAN COMPREHENSION RULES - You must follow these strictly:\n"
+            "- You are a REAL person with NORMAL comprehension limits. If the learner's question is vague, incomplete, poorly worded, or confusing, you DO NOT understand it.\n"
+            "- When confused, respond naturally with phrases like: '不好意思，我不太懂你的意思', '你可以说得更清楚一点吗？', '你到底想问什么？', '可以给我多一点细节吗？', or '我有点搞不清楚。'\n"
+            "- NEVER guess what they meant. NEVER fill in missing information.\n"
+            "- You only understand clear, specific questions.\n"
+            "- If they use unclear references like '那个' or '它', ask what they mean.\n"
+            "- If they ask a very general question like '帮我教学', ask follow-up questions to narrow it down.\n\n"
+
+            "PERSONALITY AND COACHING RULES:\n"
+            "- You are friendly, talkative, curious, and supportive.\n"
+            "- Speak like a real college student helping a classmate.\n"
+            "- Use 3-6 sentences per turn.\n"
+            "- Show personality occasionally (e.g., '这个问题问得不错', '我也常常这样用AI', '这样问很聪明').\n"
+            "- After answering, briefly explain how their question helped or how it could be clearer.\n"
+            "- Occasionally suggest improved versions of their prompt.\n"
+            "- Encourage them to try again with clearer wording.\n\n"
+
+            "INTERACTION RULES:\n"
+            "- Ask only one clarification question at a time when confused.\n"
+            "- Do not overwhelm the learner.\n"
+            "- You only speak Mandarin Chinese.\n"
+            "- Do not mention that you are an AI.\n"
+            "- Act fully like a real human conversation partner helping someone learn how to talk to AI."
+        ),
+        "language_hint": "Mandarin Chinese"
+    }
+]
+
+
+
+# --------------------------- Helper Functions ---------------------------
+
+def analyze_conversation_metrics(conversation):
+    """
+    Analyze conversation using Python NLP packages to generate linguistic metrics.
+    Returns a formatted analysis report as a string.
+    """
+    if not ANALYSIS_AVAILABLE:
+        return generate_basic_analysis(conversation)
+    
+    # Separate user and assistant turns
+    user_turns = [msg['text'] for msg in conversation if msg['role'] == 'user']
+    assistant_turns = [msg['text'] for msg in conversation if msg['role'] == 'assistant']
+    
+    # Combine all user text
+    user_text = ' '.join(user_turns)
+    
+    # Basic counts
+    total_turns = len(conversation)
+    user_turn_count = len(user_turns)
+    assistant_turn_count = len(assistant_turns)
+    
+    # Analyze user language
+    analysis = {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'basic_stats': analyze_basic_stats(user_text, user_turns),
+        'complexity_metrics': analyze_complexity(user_text),
+        'fluency_metrics': analyze_fluency(user_turns),
+        'vocabulary_metrics': analyze_vocabulary(user_text),
+        'turn_taking': {
+            'total_turns': total_turns,
+            'user_turns': user_turn_count,
+            'assistant_turns': assistant_turn_count,
+            'avg_words_per_user_turn': sum(len(turn.split()) for turn in user_turns) / max(user_turn_count, 1)
+        }
+    }
+    
+    return format_analysis_report(analysis, conversation)
+
+def analyze_basic_stats(text, turns):
+    """Calculate basic text statistics."""
+    words = word_tokenize(text.lower())
+    sentences = sent_tokenize(text)
+    
+    # Remove punctuation from words
+    words_only = [w for w in words if w.isalnum()]
+    
+    return {
+        'total_words': len(words_only),
+        'total_sentences': len(sentences),
+        'total_turns': len(turns),
+        'avg_words_per_sentence': len(words_only) / max(len(sentences), 1),
+        'avg_words_per_turn': len(words_only) / max(len(turns), 1)
+    }
+
+def analyze_complexity(text):
+    """Analyze text complexity using various readability metrics."""
+    if not text.strip():
+        return {}
+    
+    try:
+        return {
+            'flesch_reading_ease': round(textstat.flesch_reading_ease(text), 2),
+            'flesch_kincaid_grade': round(textstat.flesch_kincaid_grade(text), 2),
+            'gunning_fog': round(textstat.gunning_fog(text), 2),
+            'automated_readability_index': round(textstat.automated_readability_index(text), 2),
+            'coleman_liau_index': round(textstat.coleman_liau_index(text), 2),
+            'avg_syllables_per_word': round(textstat.avg_syllables_per_word(text), 2),
+            'difficult_words': textstat.difficult_words(text)
+        }
+    except:
+        return {}
+
+def analyze_fluency(turns):
+    """Analyze fluency metrics including false starts, fillers, etc."""
+    filler_words = ['um', 'uh', 'like', 'you know', 'i mean', 'sort of', 'kind of', 
+                    'actually', 'basically', 'literally', 'well', 'so', 'okay', 'right']
+    
+    total_fillers = 0
+    total_words = 0
+    hesitations = 0
+    
+    for turn in turns:
+        words = turn.lower().split()
+        total_words += len(words)
+        
+        # Count fillers
+        for filler in filler_words:
+            if ' ' in filler:
+                total_fillers += turn.lower().count(filler)
+            else:
+                total_fillers += words.count(filler)
+        
+        # Count hesitations (repeated words)
+        for i in range(len(words) - 1):
+            if words[i] == words[i + 1] and words[i].isalnum():
+                hesitations += 1
+    
+    return {
+        'total_filler_words': total_fillers,
+        'filler_word_rate': round(total_fillers / max(total_words, 1) * 100, 2),
+        'hesitations_repetitions': hesitations
+    }
+
+def analyze_vocabulary(text):
+    """Analyze vocabulary diversity and sophistication."""
+    words = word_tokenize(text.lower())
+    words_only = [w for w in words if w.isalnum()]
+    
+    if not words_only:
+        return {}
+    
+    # Unique words
+    unique_words = set(words_only)
+    
+    # Type-Token Ratio (vocabulary diversity)
+    ttr = len(unique_words) / len(words_only)
+    
+    # POS tagging
+    try:
+        pos_tags = nltk.pos_tag(words_only)
+        pos_counts = Counter([tag for word, tag in pos_tags])
+        
+        # Count different word types
+        verbs = sum(count for tag, count in pos_counts.items() if tag.startswith('VB'))
+        nouns = sum(count for tag, count in pos_counts.items() if tag.startswith('NN'))
+        adjectives = sum(count for tag, count in pos_counts.items() if tag.startswith('JJ'))
+        adverbs = sum(count for tag, count in pos_counts.items() if tag.startswith('RB'))
+    except:
+        verbs = nouns = adjectives = adverbs = 0
+    
+    # Most common words
+    word_freq = Counter(words_only)
+    most_common = word_freq.most_common(10)
+    
+    return {
+        'total_unique_words': len(unique_words),
+        'type_token_ratio': round(ttr, 3),
+        'lexical_density': round(ttr * 100, 2),
+        'verbs': verbs,
+        'nouns': nouns,
+        'adjectives': adjectives,
+        'adverbs': adverbs,
+        'most_common_words': most_common
+    }
+
+def format_analysis_report(analysis, conversation):
+    """Format the analysis into a readable text report."""
+    report = []
+    
+    # Header
+    report.append("=" * 80)
+    report.append("CONVERSATION ANALYSIS REPORT")
+    report.append("=" * 80)
+    report.append(f"Generated: {analysis['timestamp']}")
+    report.append("")
+    
+    # Basic Statistics
+    report.append("-" * 80)
+    report.append("BASIC STATISTICS")
+    report.append("-" * 80)
+    bs = analysis['basic_stats']
+    report.append(f"Total Words (Student): {bs['total_words']}")
+    report.append(f"Total Sentences: {bs['total_sentences']}")
+    report.append(f"Total Turns: {bs['total_turns']}")
+    report.append(f"Average Words per Sentence: {bs['avg_words_per_sentence']:.2f}")
+    report.append(f"Average Words per Turn: {bs['avg_words_per_turn']:.2f}")
+    report.append("")
+    
+    # Turn-taking
+    report.append("-" * 80)
+    report.append("TURN-TAKING ANALYSIS")
+    report.append("-" * 80)
+    tt = analysis['turn_taking']
+    report.append(f"Total Conversation Turns: {tt['total_turns']}")
+    report.append(f"Student Turns: {tt['user_turns']}")
+    report.append(f"Bot Turns: {tt['assistant_turns']}")
+    report.append(f"Average Words per Student Turn: {tt['avg_words_per_user_turn']:.2f}")
+    report.append("")
+    
+    # Complexity Metrics
+    if analysis['complexity_metrics']:
+        report.append("-" * 80)
+        report.append("COMPLEXITY METRICS")
+        report.append("-" * 80)
+        cm = analysis['complexity_metrics']
+        if 'flesch_reading_ease' in cm:
+            report.append(f"Flesch Reading Ease: {cm['flesch_reading_ease']}")
+            report.append("  (0-30: Very Difficult, 60-70: Standard, 90-100: Very Easy)")
+        if 'flesch_kincaid_grade' in cm:
+            report.append(f"Flesch-Kincaid Grade Level: {cm['flesch_kincaid_grade']}")
+        if 'gunning_fog' in cm:
+            report.append(f"Gunning Fog Index: {cm['gunning_fog']}")
+        if 'automated_readability_index' in cm:
+            report.append(f"Automated Readability Index: {cm['automated_readability_index']}")
+        if 'coleman_liau_index' in cm:
+            report.append(f"Coleman-Liau Index: {cm['coleman_liau_index']}")
+        if 'avg_syllables_per_word' in cm:
+            report.append(f"Average Syllables per Word: {cm['avg_syllables_per_word']}")
+        if 'difficult_words' in cm:
+            report.append(f"Difficult Words Count: {cm['difficult_words']}")
+        report.append("")
+    
+    # Fluency Metrics
+    report.append("-" * 80)
+    report.append("FLUENCY METRICS")
+    report.append("-" * 80)
+    fm = analysis['fluency_metrics']
+    report.append(f"Total Filler Words: {fm['total_filler_words']}")
+    report.append(f"Filler Word Rate: {fm['filler_word_rate']}%")
+    report.append(f"Hesitations/Repetitions: {fm['hesitations_repetitions']}")
+    report.append("")
+    
+    # Vocabulary Metrics
+    if analysis['vocabulary_metrics']:
+        report.append("-" * 80)
+        report.append("VOCABULARY METRICS")
+        report.append("-" * 80)
+        vm = analysis['vocabulary_metrics']
+        if 'total_unique_words' in vm:
+            report.append(f"Total Unique Words: {vm['total_unique_words']}")
+        if 'type_token_ratio' in vm:
+            report.append(f"Type-Token Ratio (TTR): {vm['type_token_ratio']}")
+            report.append(f"Lexical Density: {vm['lexical_density']}%")
+        if 'verbs' in vm:
+            report.append(f"\nWord Type Distribution:")
+            report.append(f"  Verbs: {vm['verbs']}")
+            report.append(f"  Nouns: {vm['nouns']}")
+            report.append(f"  Adjectives: {vm['adjectives']}")
+            report.append(f"  Adverbs: {vm['adverbs']}")
+        if 'most_common_words' in vm and vm['most_common_words']:
+            report.append(f"\nMost Common Words:")
+            for word, count in vm['most_common_words']:
+                report.append(f"  {word}: {count}")
+        report.append("")
+    
+    # Transcript
+    report.append("=" * 80)
+    report.append("FULL CONVERSATION TRANSCRIPT")
+    report.append("=" * 80)
+    report.append("")
+    
+    for i, msg in enumerate(conversation, 1):
+        role = "STUDENT" if msg['role'] == 'user' else "BOT"
+        report.append(f"[Turn {i}] {role}:")
+        report.append(f"{msg['text']}")
+        report.append("")
+    
+    report.append("=" * 80)
+    report.append("END OF REPORT")
+    report.append("=" * 80)
+    
+    return '\n'.join(report)
+
+def generate_basic_analysis(conversation):
+    """Generate a basic analysis when NLP packages are not available."""
+    user_turns = [msg['text'] for msg in conversation if msg['role'] == 'user']
+    user_text = ' '.join(user_turns)
+    
+    word_count = len(user_text.split())
+    sentence_count = user_text.count('.') + user_text.count('!') + user_text.count('?')
+    
+    report = []
+    report.append("=" * 80)
+    report.append("CONVERSATION ANALYSIS REPORT (Basic)")
+    report.append("=" * 80)
+    report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report.append("")
+    report.append("⚠️  NOTE: Advanced analysis unavailable.")
+    if NLP_ERROR_MESSAGE:
+        report.append(f"Error: {NLP_ERROR_MESSAGE}")
+    report.append("To enable full analysis, ensure textstat and nltk are installed:")
+    report.append("  pip install textstat nltk")
+    report.append("")
+    report.append("For debugging, visit: /debug/nlp on your server")
+    report.append("")
+    report.append("-" * 80)
+    report.append("BASIC STATISTICS")
+    report.append("-" * 80)
+    report.append(f"Total Words (Student): {word_count}")
+    report.append(f"Estimated Sentences: {sentence_count}")
+    report.append(f"Student Turns: {len(user_turns)}")
+    report.append("")
+    
+    # Transcript
+    report.append("=" * 80)
+    report.append("FULL CONVERSATION TRANSCRIPT")
+    report.append("=" * 80)
+    report.append("")
+    
+    for i, msg in enumerate(conversation, 1):
+        role = "STUDENT" if msg['role'] == 'user' else "BOT"
+        report.append(f"[Turn {i}] {role}:")
+        report.append(f"{msg['text']}")
+        report.append("")
+    
+    return '\n'.join(report)
+
+# --------------------------- Flask App ---------------------------
+
+app = Flask(__name__)
+CORS(app)
+
+@app.route("/")
+def index():
+    return redirect("/realtime")
+
+@app.route("/debug/nlp")
+def debug_nlp():
+    """Debug endpoint to check NLP package status"""
+    status = {
+        "analysis_available": ANALYSIS_AVAILABLE,
+        "error_message": NLP_ERROR_MESSAGE,
+        "packages": {}
+    }
+    
+    try:
+        import textstat
+        status["packages"]["textstat"] = textstat.__version__ if hasattr(textstat, '__version__') else "installed"
+    except ImportError:
+        status["packages"]["textstat"] = "NOT INSTALLED"
+    
+    try:
+        import nltk
+        status["packages"]["nltk"] = nltk.__version__
+        status["nltk_data_path"] = nltk.data.path
+        
+        # Check NLTK data
+        status["nltk_data"] = {}
+        try:
+            nltk.data.find('tokenizers/punkt')
+            status["nltk_data"]["punkt"] = "found"
+        except LookupError:
+            status["nltk_data"]["punkt"] = "MISSING"
+        
+        try:
+            nltk.data.find('corpora/stopwords')
+            status["nltk_data"]["stopwords"] = "found"
+        except LookupError:
+            status["nltk_data"]["stopwords"] = "MISSING"
+        
+        try:
+            nltk.data.find('taggers/averaged_perceptron_tagger')
+            status["nltk_data"]["pos_tagger"] = "found"
+        except LookupError:
+            status["nltk_data"]["pos_tagger"] = "MISSING"
+            
+    except ImportError:
+        status["packages"]["nltk"] = "NOT INSTALLED"
+    
+    return jsonify(status)
+
+
+@app.route("/session", methods=["POST"])
+def create_session():
+    data = request.json or {}
+    bot_id = data.get("bot_id", BOTS[0]["id"])
+    bot = next((b for b in BOTS if b["id"] == bot_id), BOTS[0])
+
+    instructions = f"""
+You are: {bot['role']}
+Your task: {bot['task']}
+Constraints: {bot['constraints']}
+Language hint: {bot.get('language_hint', 'English')}
+"""
+    session_payload = {
+        "session": {
+            "type": "realtime",
+            "model": OPENAI_REALTIME_MODEL,
+            "instructions": instructions.strip(),
+            "audio": {
+                "input": {
+                    "transcription": {
+                        "model": "whisper-1",
+                        "language": "zh"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": VAD_THRESHOLD,
+                        "silence_duration_ms": RT_SILENCE_MS,
+                        "prefix_padding_ms": 300
+                    }
+                },
+                "output": {
+                    "voice": bot.get("voice", OPENAI_REALTIME_VOICE_DEFAULT)
+                }
+            }
+        }
+    }
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/realtime/client_secrets",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=session_payload,
+            timeout=10
+        )
+        if not resp.ok:
+            print(f"OpenAI session create error {resp.status_code}: {resp.text}")
+        resp.raise_for_status()
+        return jsonify(resp.json()), resp.status_code
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/analyze", methods=["POST"])
+def analyze_conversation():
+    """
+    Analyze conversation using Python NLP packages.
+    Returns a downloadable text file with transcript and metrics.
+    """
+    try:
+        data = request.json
+        conversation = data.get('conversation', [])
+        bot_id = data.get('bot_id', 'unknown')
+        
+        if not conversation:
+            return jsonify({"error": "No conversation data provided"}), 400
+        
+        # Generate analysis report
+        report = analyze_conversation_metrics(conversation)
+        
+        # Create response with text file
+        filename = f"conversation-analysis-{bot_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        
+        return Response(
+            report,
+            mimetype='text/plain',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}'
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/realtime")
+def realtime_page():
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Mandarin Multi-Bot Realtime Voice</title>
+<style>
+* {{ box-sizing:border-box; }}
+body {{
+  margin:0; padding:0; font-family:system-ui,sans-serif;
+  background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+  color:#fff; min-height:100vh; display:flex; flex-direction:column;
+}}
+.top-bar {{
+  background:rgba(0,0,0,0.3); padding:1rem; display:flex;
+  align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;
+}}
+.top-bar h1 {{ margin:0; font-size:1.5rem; }}
+.status-indicator {{
+  display:flex; align-items:center; gap:0.5rem;
+  padding:0.5rem 1rem; background:rgba(0,0,0,0.3); border-radius:20px;
+}}
+.status-dot {{
+  width:12px; height:12px; border-radius:50%;
+  background:#666; transition:background 0.3s;
+}}
+.status-dot.idle {{ background:#999; }}
+.status-dot.connecting {{ background:#ff9500; animation:pulse 1s infinite; }}
+.status-dot.ready {{ background:#34c759; }}
+.status-dot.error {{ background:#ff3b30; }}
+@keyframes pulse {{ 0%,100%{{opacity:1;}} 50%{{opacity:0.5;}} }}
+
+.container {{
+  flex:1; display:flex; flex-direction:column; max-width:1200px;
+  width:100%; margin:0 auto; padding:1rem; gap:1rem;
+}}
+.scenarios {{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:1rem;
+}}
+.scenario-btn {{
+  background:rgba(255,255,255,0.15); backdrop-filter:blur(10px);
+  border:2px solid transparent; border-radius:12px;
+  padding:1rem; cursor:pointer; transition:all 0.3s;
+  color:#fff; font-size:1rem; font-weight:600;
+}}
+.scenario-btn:hover {{ background:rgba(255,255,255,0.25); transform:translateY(-2px); }}
+.scenario-btn.active {{
+  background:rgba(255,255,255,0.3);
+  border-color:rgba(255,255,255,0.5);
+  box-shadow:0 4px 15px rgba(0,0,0,0.2);
+}}
+
+.chat-area {{
+  flex:1; background:rgba(255,255,255,0.1); backdrop-filter:blur(10px);
+  border-radius:12px; padding:1rem; overflow-y:auto; min-height:300px;
+  display:flex; flex-direction:column; gap:0.5rem;
+}}
+.log-entry {{
+  padding:0.75rem; border-radius:8px; max-width:80%;
+  word-wrap:break-word; animation:slideIn 0.3s ease-out;
+}}
+@keyframes slideIn {{ from{{opacity:0;transform:translateY(10px);}} to{{opacity:1;transform:translateY(0);}} }}
+.log-entry.assistant {{
+  background:rgba(52,199,89,0.2); align-self:flex-start;
+  border-left:3px solid #34c759;
+}}
+.log-entry.user {{
+  background:rgba(0,122,255,0.2); align-self:flex-end;
+  border-right:3px solid #007aff;
+}}
+
+.controls {{
+  display:flex; gap:0.5rem; flex-wrap:wrap;
+}}
+.btn {{
+  flex:1; min-width:120px; padding:0.75rem 1.5rem;
+  border:none; border-radius:8px; font-size:1rem;
+  cursor:pointer; transition:all 0.3s; font-weight:600;
+}}
+.btn-primary {{
+  background:#34c759; color:#fff;
+}}
+.btn-primary:hover:not(:disabled) {{ background:#30b350; transform:scale(1.05); }}
+.btn-danger {{
+  background:#ff3b30; color:#fff;
+}}
+.btn-danger:hover:not(:disabled) {{ background:#e6352a; transform:scale(1.05); }}
+.btn-secondary {{
+  background:rgba(255,255,255,0.2); color:#fff;
+}}
+.btn-secondary:hover:not(:disabled) {{ background:rgba(255,255,255,0.3); }}
+.btn-info {{
+  background:#007aff; color:#fff;
+}}
+.btn-info:hover:not(:disabled) {{ background:#0051d5; transform:scale(1.05); }}
+.btn:disabled {{
+  opacity:0.5; cursor:not-allowed;
+}}
+.btn-toggle {{
+  background:rgba(255,200,0,0.25); color:#fff;
+}}
+.btn-toggle:hover:not(:disabled) {{ background:rgba(255,200,0,0.4); }}
+.chat-area.hidden {{
+  display:none;
+}}
+
+@media (max-width:768px) {{
+  .top-bar {{ flex-direction:column; align-items:flex-start; }}
+  .scenarios {{ grid-template-columns:1fr; }}
+  .controls {{ flex-direction:column; }}
+  .btn {{ min-width:100%; }}
+}}
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>🎤 中文口语练习 (CFL Conversation Practice)</h1>
+  <div class="status-indicator">
+    <div class="status-dot idle" id="statusDot"></div>
+    <span id="statusText">Idle</span>
+  </div>
+</div>
+
+<div class="container">
+  <div class="scenarios" id="scenarioButtons"></div>
+  
+  <div class="chat-area" id="chatLog"></div>
+  
+  <div class="controls">
+    <button class="btn btn-primary" id="connectBtn">Connect</button>
+    <button class="btn btn-danger" id="disconnectBtn" disabled>Disconnect</button>
+    <button class="btn btn-secondary" id="nudgeBtn" disabled>Nudge Bot</button>
+    <button class="btn btn-info" id="analyzeBtn">Analyze My Chat</button>
+    <button class="btn btn-toggle" id="toggleTranscriptBtn">Hide Transcript</button>
+    <button class="btn btn-secondary" id="clearBtn">Clear Log</button>
+    <button class="btn btn-secondary" id="nextBtn">Next Scenario</button>
+  </div>
+</div>
+
+<audio id="remoteAudio" autoplay></audio>
+
+<script>
+const bots = {json.dumps(BOTS)};
+let selectedBotId = bots[0].id;
+let pc, dc, micStream;
+let conversationHistory = [];
+
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+const nudgeBtn = document.getElementById('nudgeBtn');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const clearBtn = document.getElementById('clearBtn');
+const nextBtn = document.getElementById('nextBtn');
+const toggleTranscriptBtn = document.getElementById('toggleTranscriptBtn');
+const logEl = document.getElementById('chatLog');
+const remoteAudio = document.getElementById('remoteAudio');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+
+function setStatus(s) {{
+  statusDot.className = 'status-dot ' + s;
+  const labels = {{ idle:'Idle', connecting:'Connecting...', ready:'Ready', error:'Error' }};
+  statusText.textContent = labels[s] || s;
+}}
+
+function append(role, txt) {{
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + role;
+  div.textContent = txt;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+  
+  // Store in conversation history
+  conversationHistory.push({{ role, text: txt, timestamp: new Date().toISOString() }});
+}}
+
+function buildScenarioButtons() {{
+  const container = document.getElementById('scenarioButtons');
+  container.innerHTML = '';
+  bots.forEach(b => {{
+    const btn = document.createElement('button');
+    btn.className = 'scenario-btn';
+    btn.textContent = b.title;
+    btn.onclick = () => selectBot(b.id);
+    if (b.id === selectedBotId) btn.classList.add('active');
+    container.appendChild(btn);
+  }});
+}}
+
+function selectBot(id) {{
+  selectedBotId = id;
+  buildScenarioButtons();
+  append('assistant', `Selected scenario: ${{bots.find(b=>b.id===id).title}}`);
+}}
+
+function wireDataChannel(channel) {{
+  channel.onopen = () => {{ console.log('Data channel open'); }};
+  channel.onclose = () => {{ console.log('Data channel closed'); }};
+  channel.onerror = (e) => {{ console.error('Data channel error:', e); }};
+  channel.onmessage = (e) => {{
+    try {{
+      const msg = JSON.parse(e.data);
+      console.log('Received event:', msg.type);
+      
+      // Handle user audio transcription
+      if (msg.type === 'conversation.item.input_audio_transcription.completed') {{
+        if (msg.transcript) {{
+          console.log('User transcript:', msg.transcript);
+          append('user', msg.transcript);
+        }}
+      }}
+      // Handle assistant text responses
+      else if (msg.type === 'response.done') {{
+        const resp = msg.response;
+        if (resp && resp.output) {{
+          for (const item of resp.output) {{
+            if (item.type === 'message' && item.role === 'assistant') {{
+              for (const c of (item.content || [])) {{
+                if (c.type === 'text' && c.text) {{
+                  console.log('Assistant text:', c.text);
+                  append('assistant', c.text);
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+      // Handle assistant audio transcript (GA: response.output_audio_transcript.done; beta: response.audio_transcript.done)
+      else if (msg.type === 'response.output_audio_transcript.done' || msg.type === 'response.audio_transcript.done') {{
+        if (msg.transcript) {{
+          console.log('Assistant audio transcript:', msg.transcript);
+          append('assistant', msg.transcript);
+        }}
+      }}
+      // Log other events for debugging
+      else {{
+        console.log('Other event data:', JSON.stringify(msg).substring(0, 200));
+      }}
+    }} catch (err) {{
+      console.error('Message parse error:', err);
+    }}
+  }};
+}}
+
+function waitForIceGatheringComplete(peerConnection) {{
+  return new Promise(resolve => {{
+    if (peerConnection.iceGatheringState === 'complete') {{
+      resolve();
+    }} else {{
+      const checkState = () => {{
+        if (peerConnection.iceGatheringState === 'complete') {{
+          peerConnection.removeEventListener('icegatheringstatechange', checkState);
+          resolve();
+        }}
+      }};
+      peerConnection.addEventListener('icegatheringstatechange', checkState);
+    }}
+  }});
+}}
+
+async function connect() {{
+  try {{
+    setStatus('connecting');
+    connectBtn.disabled = true;
+    
+    // 1) Get ephemeral key
+    console.log('Requesting session...');
+    const sessionResp = await fetch('/session', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ bot_id: selectedBotId }})
+    }});
+    if (!sessionResp.ok) throw new Error('Session creation failed');
+    const session = await sessionResp.json();
+    console.log('Session created');
+
+    // 2) Mic
+    console.log('Requesting microphone access...');
+    micStream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+    console.log('Microphone access granted');
+
+    // 3) WebRTC peer connection
+    console.log('Creating peer connection...');
+    pc = new RTCPeerConnection();
+    pc.addTransceiver('audio', {{ direction: 'recvonly' }}); // receive audio
+    pc.ontrack = (e) => {{ 
+      console.log('Received audio track');
+      remoteAudio.srcObject = e.streams[0]; 
+    }};
+    
+    pc.oniceconnectionstatechange = () => {{
+      console.log('ICE connection state:', pc.iceConnectionState);
+    }};
+    
+    pc.onconnectionstatechange = () => {{
+      console.log('Connection state:', pc.connectionState);
+    }};
+    
+    // Add mic tracks and monitor them
+    for (const track of micStream.getTracks()) {{
+      console.log('Adding mic track:', track.kind, 'enabled:', track.enabled, 'muted:', track.muted, 'readyState:', track.readyState);
+      pc.addTrack(track, micStream);
+      
+      // Monitor track state
+      track.onended = () => console.log('Mic track ended!');
+      track.onmute = () => console.log('Mic track muted!');
+      track.onunmute = () => console.log('Mic track unmuted!');
+    }}
+    
+    // Monitor audio stats
+    const checkAudioStats = setInterval(async () => {{
+      if (!pc || pc.connectionState !== 'connected') {{
+        clearInterval(checkAudioStats);
+        return;
+      }}
+      const stats = await pc.getStats();
+      stats.forEach(report => {{
+        if (report.type === 'outbound-rtp' && report.kind === 'audio') {{
+          console.log('Sending audio - bytes:', report.bytesSent, 'packets:', report.packetsSent);
+        }}
+      }});
+    }}, 3000);
+
+    // 4) Data channel for commands/events
+    dc = pc.createDataChannel('oai-events');
+    wireDataChannel(dc);
+
+    // 5) Offer
+    const offer = await pc.createOffer({{ offerToReceiveAudio: true }});
+    await pc.setLocalDescription(offer);
+    await waitForIceGatheringComplete(pc);
+    console.log('ICE gathering complete');
+
+    // 6) Handshake with Realtime
+    const url = `https://api.openai.com/v1/realtime/calls`;
+    console.log('Connecting to OpenAI Realtime API...');
+    const ans = await fetch(url, {{
+      method: 'POST',
+      body: pc.localDescription.sdp,
+      headers: {{
+        'Authorization': `Bearer ${{session.value || session.client_secret?.value || session.client_secret || ''}}`,
+        'Content-Type': 'application/sdp'
+      }}
+    }});
+    const sdpText = await ans.text();
+    if (!ans.ok) {{ append('assistant', 'Realtime handshake failed: ' + sdpText); throw new Error('Realtime SDP error'); }}
+    console.log('Received SDP answer from OpenAI');
+    const answer = {{ type: 'answer', sdp: sdpText }};
+    await pc.setRemoteDescription(answer);
+
+    connectBtn.disabled = true;
+    disconnectBtn.disabled = false;
+    nudgeBtn.disabled = false;
+    setStatus('ready');
+    append('assistant', 'Connected. Speak when you are ready');
+    console.log('Connection complete!');
+  }}catch(e){{
+    connectBtn.disabled = false;
+    setStatus('error');
+    append('assistant', 'Connect error: ' + e.message);
+    console.error('Connection error:', e);
+  }}
+}}
+
+async function disconnect(){{
+  nudgeBtn.disabled = true; 
+  disconnectBtn.disabled = true; 
+  connectBtn.disabled = false;
+  
+  if (dc) try{{ dc.close(); }}catch(e){{}}
+  if (pc) try{{ pc.close(); }}catch(e){{}}
+  if (micStream) for (const t of micStream.getTracks()) t.stop();
+  setStatus('idle');
+  append('assistant', 'Disconnected. You can now analyze your chat.');
+}}
+
+// Manual poke (if VAD is shy)
+nudgeBtn.addEventListener('click', ()=>{{
+  if (!dc || dc.readyState !== 'open') return;
+  dc.send(JSON.stringify({{ type: 'response.create', response: {{ modalities: ['audio','text'] }} }}));
+  append('user', '⏺️ Nudge sent (audio+text requested).');
+}});
+
+// Analyze conversation and download report
+analyzeBtn.addEventListener('click', async ()=>{{
+  if (conversationHistory.length === 0) {{
+    alert('No conversation to analyze yet. Start speaking first!');
+    return;
+  }}
+  
+  analyzeBtn.disabled = true;
+  analyzeBtn.textContent = 'Analyzing...';
+  
+  try {{
+    const response = await fetch('/analyze', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{
+        bot_id: selectedBotId,
+        conversation: conversationHistory
+      }})
+    }});
+    
+    if (!response.ok) throw new Error('Analysis failed');
+    
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `conversation-analysis-${{new Date().toISOString().slice(0,10)}}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    
+    append('assistant', '📊 Analysis downloaded!');
+  }} catch (e) {{
+    console.error('Analysis error:', e);
+    alert('Failed to generate analysis. Please try again.');
+  }} finally {{
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = 'Analyze My Chat';
+  }}
+}});
+
+clearBtn.addEventListener('click', ()=>{{ 
+  logEl.innerHTML=''; 
+  conversationHistory = [];
+}});
+
+toggleTranscriptBtn.addEventListener('click', ()=>{{
+  const isHidden = logEl.classList.toggle('hidden');
+  toggleTranscriptBtn.textContent = isHidden ? 'Show Transcript' : 'Hide Transcript';
+}});
+
+nextBtn.addEventListener('click', ()=>{{
+  const idx = bots.findIndex(b=>b.id===selectedBotId);
+  const next = bots[(idx+1) % bots.length];
+  selectBot(next.id);
+}});
+
+connectBtn.addEventListener('click', connect);
+disconnectBtn.addEventListener('click', disconnect);
+
+buildScenarioButtons();
+</script>
+</body>
+</html>
+"""
+
+if __name__ == "__main__":
+    debug = os.getenv("FLASK_DEBUG", "0") == "1"
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=debug)
