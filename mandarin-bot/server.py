@@ -1,12 +1,15 @@
-# server.py — multi-bot Realtime voice chat, MANDARIN CHINESE version (12 preset scenarios)
-# -----------------------------------------------------------------------------------------
+# server.py — multi-bot Realtime voice chat, MANDARIN CHINESE version (8 discussion topics)
+# --------------------------------------------------------------------------------------------
 # This is a standalone copy of the English ELL practice app, adapted for CFL
 # (Chinese as a Foreign Language) learners. It is meant to be deployed as its
 # own Render service, separate from the English version — same codebase
 # shape, different BOTS content and Whisper transcription language.
 #
+# Level: Novice-High to Intermediate-Low (typical 1st/2nd-year Chinese class).
+# Topics are generic free-discussion prompts rather than scripted role-plays.
+#
 # Run:
-#   pip install flask flask-cors requests python-dotenv textstat nltk
+#   pip install flask flask-cors requests python-dotenv jieba
 #   python server.py
 # Open: http://127.0.0.1:5000/realtime
 #
@@ -23,106 +26,37 @@ from datetime import datetime
 import re
 from collections import Counter
 
-# NLP libraries for analysis
+# --------------------------- Chinese NLP (jieba) ---------------------------
+# The English version of this app used textstat + nltk for analysis, but
+# those are built around English tokenization/readability formulas and don't
+# work on Mandarin text (no spaces between words, no English-style
+# syllables). This version uses jieba for Chinese word segmentation instead
+# — it's a small, pure-Python-friendly library with a bundled dictionary
+# (no network download needed at runtime, unlike nltk's data downloads).
 ANALYSIS_AVAILABLE = False
 NLP_ERROR_MESSAGE = None
 
 print("=" * 60)
-print("Initializing NLP packages for conversation analysis...")
+print("Initializing Chinese NLP (jieba) for conversation analysis...")
 print("=" * 60)
 
 try:
-    print("Step 1: Importing textstat...")
-    import textstat
-    print(f"✓ textstat imported successfully (version: {getattr(textstat, '__version__', 'unknown')})")
-    
-    print("\nStep 2: Importing nltk...")
-    import nltk
-    print(f"✓ nltk imported successfully (version: {nltk.__version__})")
-    
-    print("\nStep 3: Setting NLTK data directory...")
-    import os
-    # Ensure NLTK data directory exists and is writable
-    nltk_data_dir = os.path.expanduser('~/nltk_data')
-    if not os.path.exists(nltk_data_dir):
-        os.makedirs(nltk_data_dir, exist_ok=True)
-        print(f"✓ Created NLTK data directory: {nltk_data_dir}")
-    else:
-        print(f"✓ NLTK data directory exists: {nltk_data_dir}")
-    
-    # Add to NLTK data path if not already there
-    if nltk_data_dir not in nltk.data.path:
-        nltk.data.path.insert(0, nltk_data_dir)
-    print(f"NLTK data paths: {nltk.data.path[:3]}")  # Show first 3 paths
-    
-    print("\nStep 4: Downloading NLTK data files...")
-    
-    # Download punkt tokenizer
-    try:
-        nltk.data.find('tokenizers/punkt')
-        print("✓ punkt tokenizer already downloaded")
-    except LookupError:
-        print("Downloading punkt tokenizer...")
-        nltk.download('punkt', quiet=False, download_dir=nltk_data_dir)
-        try:
-            nltk.download('punkt_tab', quiet=False, download_dir=nltk_data_dir)
-        except:
-            pass  # punkt_tab might not exist in older NLTK versions
-    
-    # Download stopwords
-    try:
-        nltk.data.find('corpora/stopwords')
-        print("✓ stopwords already downloaded")
-    except LookupError:
-        print("Downloading stopwords...")
-        nltk.download('stopwords', quiet=False, download_dir=nltk_data_dir)
-    
-    # Download POS tagger
-    try:
-        nltk.data.find('taggers/averaged_perceptron_tagger')
-        print("✓ POS tagger already downloaded")
-    except LookupError:
-        print("Downloading POS tagger...")
-        nltk.download('averaged_perceptron_tagger', quiet=False, download_dir=nltk_data_dir)
-        try:
-            nltk.download('averaged_perceptron_tagger_eng', quiet=False, download_dir=nltk_data_dir)
-        except:
-            pass  # Might not exist in older versions
-    
-    print("\nStep 5: Importing NLTK modules...")
-    from nltk.tokenize import word_tokenize, sent_tokenize
-    from nltk.corpus import stopwords
-    print("✓ NLTK modules imported successfully")
-    
+    import jieba
+    import jieba.posseg as pseg
+    # Trigger jieba's dictionary build once at startup rather than on the
+    # first user request, so the first /analyze call isn't slow.
+    list(jieba.cut("初始化"))
     ANALYSIS_AVAILABLE = True
-    print("\n" + "=" * 60)
-    print("✓✓✓ NLP ANALYSIS FEATURES FULLY ENABLED ✓✓✓")
-    print("=" * 60)
-    
+    print("✓ jieba imported and initialized successfully")
 except ImportError as e:
     NLP_ERROR_MESSAGE = f"Import error: {str(e)}"
-    print("\n" + "=" * 60)
-    print("✗ IMPORT ERROR - NLP packages not installed")
-    print("=" * 60)
+    print("✗ IMPORT ERROR - jieba not installed")
     print(f"Error details: {NLP_ERROR_MESSAGE}")
-    print("\nTo fix this issue:")
-    print("1. Ensure requirements.txt contains:")
-    print("   textstat==0.7.3")
-    print("   nltk==3.8.1")
-    print("2. Check Render build logs to confirm packages were installed")
-    print("=" * 60)
-    
+    print("To fix this issue, ensure requirements.txt contains: jieba==0.42.1")
 except Exception as e:
     NLP_ERROR_MESSAGE = f"Initialization error: {str(e)}"
-    print("\n" + "=" * 60)
     print("✗ INITIALIZATION ERROR")
-    print("=" * 60)
-    print(f"Error details: {NLP_ERROR_MESSAGE}")
-    print(f"Error type: {type(e).__name__}")
-    import traceback
-    print("\nFull traceback:")
-    traceback.print_exc()
-    print("=" * 60)
+    print(f"Error details: {NLP_ERROR_MESSAGE} ({type(e).__name__})")
 
 
 load_dotenv()
@@ -134,447 +68,183 @@ OPENAI_REALTIME_VOICE_DEFAULT = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
 RT_SILENCE_MS = int(os.getenv("RT_SILENCE_MS", "1200"))  # pause after user stops
 VAD_THRESHOLD = float(os.getenv("RT_VAD_THRESHOLD", "0.5"))
 
-# 7 preset "bots". Edit freely.
+# 8 preset discussion-topic "bots". Edit freely.
 BOTS = [
     {
-        "id": "zh-breakfast",
-        "title": "早点摊点餐 (Order Breakfast)",
+        "id": "zh-topic-self-family",
+        "title": "自我介绍与家庭 (Self-Introduction & Family)",
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "Native Mandarin-speaking worker at a Chinese breakfast stall (早点摊), with normal human comprehension limits",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "The learner is on their way to school and stops at your breakfast stall (早点摊). "
-            "Start with natural small talk in Mandarin before taking any order. "
-            "The menu includes 豆浆 (soy milk, sweet or unsweetened / 甜、无糖), 油条 (fried dough stick), "
-            "包子 (steamed bun — 肉包 pork or 菜包 vegetable), 蛋饼 (egg pancake), 饭团 (rice ball), "
-            "小笼包, 粥 (rice porridge), and 奶茶 (milk tea, hot or iced / 热、冰). "
-            "Ask follow-up questions about size/quantity, hot or cold, sweet or unsweetened, and whether they want it 打包 (to go) or 在这里吃 (to eat here). "
-            "Be flexible and respond naturally to the learner's order."
+            "Start with a simple greeting and introduce yourself first (name, where you're from) to model the language, "
+            "then invite the learner to introduce themselves. "
+            "Ask simple, one-at-a-time questions about their family: how many people are in their family (你家有几口人), "
+            "who they are (父母、兄弟姐妹), and something simple about one family member (like their job or age, kept simple). "
+            "Share a little about your own family too so it feels like a real back-and-forth conversation, not an interview. "
+            "Keep the conversation light, friendly, and encouraging throughout."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones count as mispronounced), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone errors, pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. NEVER interpret unclear speech. Act like a real stall worker who genuinely didn't understand.\n"
-            "- Wrong tones on a word (e.g. saying 睡觉 shuìjiào when they meant 水饺 shuǐjiǎo) genuinely confuse you — react with confusion, don't guess.\n"
-            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate (中高级) learner.\n"
-            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, say '不好意思，可以说中文吗？' and ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-bank",
-        "title": "银行卡盗刷 (Debit Card Fraud)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "Native Mandarin-speaking bank customer service representative with normal human comprehension limits",
-        "task": (
-            "Start with a greeting in Mandarin: '您好，感谢您致电中国银行，请问有什么可以帮您的？' "
-            "Ask whether the issue is with the learner's 借记卡 (debit card) or 信用卡 (credit card), then ask for the last 4 digits of their account and their name. "
-            "Ask questions naturally about the problem (what happened, when, how much money). "
-            "Confirm whether the learner made each transaction or not — there may be several transactions to go through, so keep asking until they finish reporting. "
-            "Some transactions may be legitimate; help the learner identify which are authorized vs. unauthorized. "
-            "Explain that you will block (挂失/冻结) the card and mail a new one. "
-            "Ask if the learner needs to use the card today, since it cannot be used after it's blocked. "
-            "Ask if the learner has another card. "
-            "If they need the card today, discuss alternatives (delay the block until later, use another payment method, ask a friend to pay and reimburse them). "
-            "Ask if there is anything else they need help with. "
-            "Before ending, give a short summary and say goodbye politely. "
-            "Be flexible and respond naturally."
-        ),
-        "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL customer service representative with NORMAL comprehension limits. If something is unclear, mispronounced (including wrong tones), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes pronunciation/tone errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，我没听清楚', '您可以再说一遍吗？', '我不太明白您的意思', '什么？', or '抱歉，您说什么？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real person who genuinely didn't understand.\n"
-            "- If they mispronounce important information (like account numbers, names, or amounts), you don't understand it. Ask them to repeat it slowly or spell/说清楚数字.\n"
-            "- Only once they communicate clearly and correctly should you understand and proceed.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, clearly and professionally. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, politely ask them to speak Mandarin.\n"
-            "- Be professional but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
-        ),
-        "language_hint": "Mandarin Chinese"
-    },
-    {
-        "id": "zh-matching-male",
-        "title": "找室友 (Roommate Matching – Male)",
+        "id": "zh-topic-daily-routine",
+        "title": "我的一天 (Daily Routine)",
         "voice": "verse",
-        "role": "Native Mandarin-speaking college student with normal human comprehension limits who is looking for a roommate",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "You are 伟 (Wei).\n"
-            "- Age: 19\n"
-            "- From: 台北 (Taipei)\n"
-            "- Studies: Business (商学)\n"
-            "- Personality: Organized and calm (有条理、冷静)\n"
-            "- Habits: Usually goes to bed around 10:30pm\n"
-            "- Guests: Rarely invites friends over\n"
-            "- Notes: No pets\n\n"
-
-            "Non-negotiable:\n"
-            "- Needs a quiet environment after 11pm\n\n"
-
-            "Important:\n"
-            "- Shared spaces should stay reasonably clean\n\n"
-
-            "Flexible:\n"
-            "- Occasional guests with advance notice\n\n"
-
-            "You are having a video call to see if you and the learner would be compatible roommates, entirely in Mandarin. "
-            "Start with a greeting and brief small talk. Introduce yourself gradually (do not give all information at once). "
-            "Spend the first part of the conversation getting to know each other (year, major, hometown, personality). "
-            "Do NOT bring up rules or non-negotiables immediately. "
-            "After some basic personal exchange, move naturally into daily habits and living preferences (sleep schedule, guests, cleanliness). "
-            "If something feels concerning, clearly state your concern and pause. Do NOT suggest solutions — let the learner respond first. "
-            "Do not rush to conclude. Cover all key topics before asking the learner how they feel about compatibility. "
-            "Only after hearing their response should you clearly state your decision (是 / 不是 / 也许) and briefly explain why."
+            "Chat with the learner about a typical day. Ask simple, one-at-a-time questions: what time they usually get up (你几点起床), "
+            "what they eat for breakfast, what their class or work schedule looks like, what they do after class/work, and what time they go to bed. "
+            "Ask a simple follow-up comparing weekdays and weekends (周末和平常一样吗). "
+            "Share a bit about your own daily routine too, to keep it a natural two-way conversation."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL college student with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond naturally like: '啊？', '不好意思，没听懂', '什么意思？', or '你可以再说一次吗？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real student who genuinely didn't understand.\n"
-            "- Only once they speak clearly and correctly should you understand and continue.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, naturally like a college student. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-matching-female",
-        "title": "找室友 (Roommate Matching – Female)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "Native Mandarin-speaking college student with normal human comprehension limits who is looking for a roommate",
-        "task": (
-            "You are 薇薇 (Weiwei).\n"
-            "- Age: 19\n"
-            "- From: 北京 (Beijing)\n"
-            "- Studies: Biology (生物)\n"
-            "- Personality: Friendly and a bit talkative (友善、有点爱聊天)\n"
-            "- Habits: Usually goes to bed around midnight\n"
-            "- Guests: Occasionally invites friends over on weekends\n"
-            "- Notes: No pets, but generally likes animals\n\n"
-
-            "Non-negotiable:\n"
-            "- Needs to feel comfortable chatting and having some social time at home\n\n"
-
-            "Important:\n"
-            "- Not extremely strict about quiet, but prefers it not be silent all the time\n\n"
-
-            "Flexible:\n"
-            "- Guests are fine if discussed in advance\n\n"
-
-            "You are having a video call to see if you and the learner would be compatible roommates, entirely in Mandarin. "
-            "Start with a greeting and brief small talk. Introduce yourself gradually. "
-            "Spend the first part of the conversation getting to know each other (year, major, hometown, personality). "
-            "Do NOT bring up rules or non-negotiables immediately. "
-            "After some basic personal exchange, move naturally into daily habits and living preferences. "
-            "If something feels concerning, clearly state your concern and pause. Do NOT suggest solutions — let the learner respond first. "
-            "Do not rush to conclude. Cover all key topics before asking the learner how they feel about compatibility. "
-            "Only after hearing their response should you clearly state your decision (是 / 不是 / 也许) and briefly explain why."
-        ),
-        "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL college student with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond naturally like: '啊？', '不好意思，没听懂', '什么意思？', or '你可以再说一次吗？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real student who genuinely didn't understand.\n"
-            "- Only once they speak clearly and correctly should you understand and continue.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, naturally like a college student. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
-        ),
-        "language_hint": "Mandarin Chinese"
-    },
-    {
-        "id": "zh-roommate-rules",
-        "title": "室友规则协商 (Negotiate Apartment Rules)",
-        "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "Native Mandarin-speaking roommate with normal human comprehension limits",
-        "task": (
-            "You and the learner are new roommates meeting on the first day in your apartment, speaking entirely in Mandarin. "
-            "Start with a short friendly greeting and say you're excited to live together. "
-            "Then suggest it might be a good idea to talk about some basic house rules (家规). "
-            "Ask which rule from their checklist they would like to discuss first. "
-            "Ask follow-up questions and give short, natural replies to keep the conversation going. "
-            "For at least TWO checklist items, you must disagree and explain your preference. "
-            "For ONE checklist item, clearly but nicely reject the proposal and suggest a specific alternative. "
-            "Introduce ONE additional living-rule topic not mentioned by the learner. "
-            "Do not move to a new topic until agreement or compromise is explicitly reached."
-        ),
-        "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL roommate with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond like: '什么？', '不好意思，你说什么？', '我不懂', '可以再说一遍吗？', or '啊，什么意思？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real person who genuinely didn't understand.\n"
-            "- Only once they communicate clearly should you understand and respond to their point.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, naturally like a roommate. Use vocabulary appropriate for a lower-intermediate (中低级) learner.\n"
-            "- Respond in 1-2 short sentences per turn.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to switch to Mandarin.\n"
-            "- Be casual but realistic about comprehension.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
-        ),
-        "language_hint": "Mandarin Chinese"
-    },
-    {
-        "id": "zh-travel",
-        "title": "旅游建议 (Travel Suggestion)",
+        "id": "zh-topic-hobbies-sports",
+        "title": "爱好和运动 (Hobbies & Sports)",
         "voice": "ash",
-        "role": "Native Mandarin-speaking friend with normal human comprehension limits who is planning to visit",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "You are a friend who is planning to visit the learner's hometown/country, and the whole conversation is in Mandarin. "
-            "At the beginning, you do not know the destination — wait until the learner mentions it, then treat it as your confirmed destination. "
-            "Maintain this role consistently; do not switch roles. "
-            "Ask questions about recommendations (where to go, what to eat). Show interest and curiosity, but do NOT further explain what the learner recommended — instead ask follow-up questions. "
-            "You have one or two main preferences or limitations (e.g., food, budget, physical condition, travel style). Do not change them during the conversation, and do not introduce them immediately — mention them naturally only when relevant. "
-            "If the learner suggests something that conflicts with your preferences (too spicy, too expensive, too much walking, too crowded), respond with mild hesitation or concern before asking a follow-up question. "
-            "Respond naturally and briefly, with short follow-up questions."
+            "Chat with the learner about hobbies and sports. Ask what they like to do in their free time (你喜欢做什么), "
+            "whether they play or watch any sports, how often they do their hobby, and who they usually do it with. "
+            "Ask a simple follow-up about how they started liking it, kept at a simple level. "
+            "Share your own hobby too so it's a natural exchange, not just a Q&A."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL friend with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond like: '啊？', '不好意思？', '我没听清楚', '你说什么？', or '我不太懂你的意思'\n"
-            "- If they mispronounce place names or food names, you don't know what they're talking about — ask them to repeat it slowly.\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real friend who genuinely didn't understand.\n"
-            "- Only when they speak clearly should you understand and continue.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, naturally like a friend. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about comprehension.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond.\n"
-            "- Do NOT end the conversation with closing phrases such as 祝你旅途愉快 or any farewell message."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-yoga",
-        "title": "邀请上瑜伽课 (Yoga Class Invitation)",
+        "id": "zh-topic-weather-seasons",
+        "title": "天气和季节 (Weather & Seasons)",
         "voice": "sage",
-        "role": "Native Mandarin-speaking international friend at college with normal human comprehension limits. You have never done yoga before and you're not very interested in sports",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "The speaker will invite you to a yoga class based on a flyer, entirely in Mandarin. "
-            "First, show mild reluctance because you are not interested in sports, and ask what is appealing about yoga. "
-            "As the conversation develops, ask follow-up questions naturally (schedule, level, difficulty, price, location) — one question at a time, responding to the speaker's answers first. "
-            "You have a possible schedule conflict, so hesitate about joining at first. "
-            "After hearing the speaker's suggestions or encouragement, gradually become more open to the idea. "
-            "By the end of the conversation, agree to try the class and negotiate a time to go together."
+            "Chat with the learner about weather and seasons. Ask what the weather is like today where they are (今天天气怎么样), "
+            "which season they like best and why, and what they like to do in that season. "
+            "Ask a simple follow-up about weather in their hometown compared to where they live now. "
+            "Share your own favorite season too."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL friend with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, respond like: '什么？', '不好意思，没听懂', '啊？', '可以再说一次吗？', or '我有点confused'\n"
-            "- If they mispronounce key information (times, days, prices), you don't get it — ask them to repeat.\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real person who genuinely didn't understand.\n"
-            "- Only when they communicate clearly should you understand.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, naturally like a college friend. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about comprehension.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-office-hours-1",
-        "title": "办公室谈话一：请假 (Office Hours 1 – Missed Field Trip)",
+        "id": "zh-topic-school-major",
+        "title": "学校生活和专业 (School Life & Major)",
         "voice": "cedar",
-        "role": "You are 陈教授 (Professor Chen), who teaches Introduction to Economics. Your student 莉莉 (Lily, the learner) missed last Friday's field trip and has come to your office to talk about it.",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "Start with casual conversation and ask what the learner's issue is (entirely in Mandarin). "
-            "Respond shortly but naturally, and nicely ask why they missed the field trip. "
-            "Ask why they didn't email you earlier, and whether they were seriously ill. "
-            "If the learner explicitly asks about another chance, making up the field trip, or doing something for credit, treat it as a request for a make-up opportunity. "
-            "Only after such a request, offer TWO specific make-up options: (1) completing a project within four days, or (2) joining next week's field trip. "
-            "Explain both options clearly and ask the learner to choose one. "
-            "Do not end the conversation until the learner clearly selects one option. "
-            "Respond positively and agree with their choice. "
-            "End the conversation by showing understanding and saying something supportive."
+            "Chat with the learner about school life. Ask what they are studying (你的专业是什么), "
+            "what classes they're taking this semester, which class is their favorite and why, and what their campus or classes are like. "
+            "Ask a simple follow-up about why they chose their major, kept at a simple level. "
+            "Share a bit about your own studies too."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real professor who genuinely didn't understand.\n"
-            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-office-hours-2",
-        "title": "办公室谈话二：申请延期 (Office Hours 2 – Extension Request)",
+        "id": "zh-topic-food-dining",
+        "title": "食物和餐厅 (Food & Dining Out)",
         "voice": "shimmer",
-        "role": "You are 李教授 (Professor Li), who teaches Global Communication. Your student 亚历克斯 (Alex, the learner) has come to your office to discuss something.",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "Start with a casual conversation and ask what the learner's issue is, entirely in Mandarin. "
-            "If the learner asks for an extension (延期), ask why they want it, and respond naturally to their explanation. "
-            "If the learner doesn't share their current progress (how many pages written, which sections finished), ask follow-up questions about their project. "
-            "At first, disagree with a one-week extension and offer a partial-submission option instead. "
-            "If the learner still needs the full one-week extension, agree — but with some attitude/reluctance. "
-            "Then end the conversation nicely with agreement."
+            "Chat with the learner about food. Ask what kind of food they like (你喜欢吃什么), "
+            "what they usually eat for meals, whether they like to cook or eat out, and about a restaurant they like. "
+            "Ask a simple follow-up about a food they don't like or haven't tried. "
+            "Share your own food preferences too."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real professor who genuinely didn't understand.\n"
-            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-haircut",
-        "title": "预约剪发 (Book a Haircut Appointment)",
+        "id": "zh-topic-shopping",
+        "title": "购物 (Shopping)",
         "voice": "coral",
-        "role": "You are a popular and busy hair stylist. You are answering a phone call from the learner, entirely in Mandarin.",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "Start with a short, casual greeting. Respond briefly and naturally to the learner's responses. "
-            "Do not provide all information at once — only provide details about services, prices, time, or location when the learner asks. "
-            "Ask short follow-up questions to clarify the learner's needs, preferred services, and schedule. "
-            "Negotiate the appointment time naturally. Do NOT accept every time the learner suggests — some time slots must be unavailable or limited.\n\n"
-            "Availability:\n"
-            "- Monday: closed all day (周一休息).\n"
-            "- Tuesday morning: unavailable.\n"
-            "- Wednesday 2 PM: clearly available.\n"
-            "- Thursday afternoon: closed.\n"
-            "- Friday evening: fully booked.\n"
-            "- Saturday: almost full (only one late slot available).\n"
-            "- Sunday: almost full (only one morning slot available).\n\n"
-            "Services & Prices (含税, 不含小费 / including tax, excluding tip):\n"
-            "- 剪发 Haircut (does NOT include shampoo): ¥180.\n"
-            "- 洗发 Shampoo: ¥40.\n"
-            "- 护发 Hair treatment: ¥150.\n"
-            "- 染发 Coloring (includes shampoo): price depends on hair length (Short ¥220, Medium ¥280, Semi-long ¥350, Long ¥420).\n"
-            "  • Retouch (补染): ¥180.\n"
-            "  • Highlight (挑染): price depends on consultation.\n"
-            "If the learner requests coloring, mention it takes about 2 hours. If necessary, ask about hair length before confirming the coloring price.\n\n"
-            "Location: Only provide directions if asked. Keep directions short and natural (e.g., which bus lines stop nearby).\n\n"
-            "Before final confirmation, make sure the learner has clarified service details, price, and time. "
-            "After confirming, briefly summarize the service, date, and time. End the call politely and naturally."
+            "Chat with the learner about shopping. Ask where they like to shop (你喜欢在哪儿买东西), "
+            "what kinds of things they like to buy, whether they prefer shopping online or in stores, and about something they bought recently. "
+            "Ask a simple follow-up about prices — whether they think something is expensive or cheap (贵/便宜). "
+            "Share your own shopping habits too."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real hair stylist who genuinely didn't understand.\n"
-            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be friendly but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     },
     {
-        "id": "zh-parking-court",
-        "title": "停车罚单申诉 (Contest a Parking Ticket in Court)",
+        "id": "zh-topic-weekend-friends",
+        "title": "周末计划和朋友 (Weekend Plans & Friends)",
         "voice": "ballad",
-        "role": "You are a judge in a small claims court. The learner is contesting an ¥85 parking ticket. The entire hearing is conducted in Mandarin.",
+        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
         "task": (
-            "Begin the hearing briefly and formally. "
-            "Ask the learner to explain why they are contesting the parking ticket. "
-            "Require the learner to address you as '法官大人' (Your Honor). "
-            "Ask the learner to describe what happened and refer to the parking receipt as evidence. "
-            "Ask the learner to confirm the details shown in the receipt: the license plate number, the time the payment was made, the valid parking period, and the parking zone number. "
-            "Tell the learner the ticket was issued at 12:45 PM and ask how they explain this, given the valid parking period. "
-            "Ask why the parking officer may not have recognized the payment. "
-            "If the learner's explanation is unclear or inconsistent, challenge them politely and ask for clarification — do not immediately accept vague answers. "
-            "After reviewing the explanation and evidence, decide the explanation is sufficient and dismiss the ticket. "
-            "End the hearing formally and appropriately."
+            "Chat with the learner about weekend plans and friends. Ask what they usually do on weekends (周末你常常做什么), "
+            "whether they like to spend time with friends or alone, and what they're planning to do this coming weekend. "
+            "Ask a simple follow-up inviting them to describe a fun weekend they remember. "
+            "Share your own weekend plans too, to keep it a natural exchange."
         ),
         "constraints": (
-            "CRITICAL COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL person with NORMAL comprehension limits. If something is unclear, mispronounced (wrong tones included), grammatically incorrect, or uses the wrong word, you CANNOT understand it.\n"
-            "- When the learner gives unclear explanations, incorrect details, or confusing timelines, respond with polite but firm questions such as: '可以请你说清楚一点吗？', '这跟罚单记录的不一样', or '请再解释一次。'\n"
-            "- When the learner makes tone/pronunciation errors, grammar mistakes, uses the wrong word, or speaks unclearly, immediately say things like: '不好意思，你说什么？', '我没听清楚', '啊？', '你可以再说一遍吗？', or '什么意思？'\n"
-            "- NEVER guess what they meant. NEVER fill in the gaps. Act like a real judge who genuinely didn't understand.\n"
-            "- Only once they speak clearly and correctly should you understand and proceed.\n\n"
-            "OTHER RULES:\n"
-            "- Speak Mandarin Chinese ONLY, clearly and at a normal pace. Use vocabulary appropriate for an upper-intermediate learner.\n"
-            "- Respond in 1-2 short sentences per turn. Do not explain options or give long responses.\n"
-            "- Ask ONLY one question at a time.\n"
-            "- You only understand Mandarin. If another language is used, ask them to speak Mandarin.\n"
-            "- Be neutral but realistic about your comprehension limits.\n"
-            "- After asking a question, wait about 5 seconds for the learner to respond."
-        ),
-        "language_hint": "Mandarin Chinese"
-    },
-    {
-        "id": "zh-ai-chat-coach",
-        "title": "AI 提问教练 (AI Chat Coach)",
-        "voice": "alloy",
-        "role": "You are 小雅 (Xiaoya), a friendly, talkative college student who loves using AI tools for school and helping others learn how to talk to AI effectively. You are curious, expressive, and encouraging. However, you are a REAL human with normal comprehension limits — you do not automatically understand unclear, vague, or poorly explained questions.",
-        "task": (
-            "Start by greeting the learner casually (in Mandarin) and explaining that you will help them practice asking questions to AI. "
-            "Invite them to ask their first question. "
-            "When they ask a clear question, give a helpful, informative answer. "
-            "After answering, briefly explain why their question worked well or how they could improve it. "
-            "If their question is vague, incomplete, or confusing, genuinely say you don't understand and ask them to clarify. "
-            "Ask natural follow-up questions to help them improve their prompt (audience, purpose, context, format, constraints). "
-            "Sometimes suggest a better version of their question and label it clearly as: '更清楚的问法是：...' "
-            "Be conversational, personable, and supportive throughout."
-        ),
-        "constraints": (
-            "CRITICAL HUMAN COMPREHENSION RULES - You must follow these strictly:\n"
-            "- You are a REAL person with NORMAL comprehension limits. If the learner's question is vague, incomplete, poorly worded, or confusing, you DO NOT understand it.\n"
-            "- When confused, respond naturally with phrases like: '不好意思，我不太懂你的意思', '你可以说得更清楚一点吗？', '你到底想问什么？', '可以给我多一点细节吗？', or '我有点搞不清楚。'\n"
-            "- NEVER guess what they meant. NEVER fill in missing information.\n"
-            "- You only understand clear, specific questions.\n"
-            "- If they use unclear references like '那个' or '它', ask what they mean.\n"
-            "- If they ask a very general question like '帮我教学', ask follow-up questions to narrow it down.\n\n"
-
-            "PERSONALITY AND COACHING RULES:\n"
-            "- You are friendly, talkative, curious, and supportive.\n"
-            "- Speak like a real college student helping a classmate.\n"
-            "- Use 3-6 sentences per turn.\n"
-            "- Show personality occasionally (e.g., '这个问题问得不错', '我也常常这样用AI', '这样问很聪明').\n"
-            "- After answering, briefly explain how their question helped or how it could be clearer.\n"
-            "- Occasionally suggest improved versions of their prompt.\n"
-            "- Encourage them to try again with clearer wording.\n\n"
-
-            "INTERACTION RULES:\n"
-            "- Ask only one clarification question at a time when confused.\n"
-            "- Do not overwhelm the learner.\n"
-            "- You only speak Mandarin Chinese.\n"
-            "- Do not mention that you are an AI.\n"
-            "- Act fully like a real human conversation partner helping someone learn how to talk to AI."
+            "CONVERSATION STYLE:\n"
+            "- You are a supportive conversation partner, not a strict examiner. Your goal is to keep the learner talking and build their confidence.\n"
+            "- Ask ONLY one question at a time, and wait for their answer before continuing.\n"
+            "- If something the learner says is genuinely unclear or unintelligible, ask them warmly to repeat or say it another way (e.g. '不好意思，可以再说一次吗？' or '你可以说得慢一点吗？'). Do not guess at meaning you can't make out.\n"
+            "- Do NOT nitpick minor pronunciation or tone slips that don't block understanding — only ask for clarification when you genuinely cannot follow what they mean. Prioritize keeping the conversation flowing over correcting them.\n"
+            "- You only understand Mandarin. If another language is used, gently ask them to try it in Chinese.\n"
+            "- After asking a question, pause and give the learner time to respond before jumping in."
         ),
         "language_hint": "Mandarin Chinese"
     }
@@ -582,175 +252,295 @@ BOTS = [
 
 
 
+
 # --------------------------- Helper Functions ---------------------------
+# Chinese-appropriate conversation analysis. Uses jieba for word
+# segmentation/POS tagging (there is no whitespace between Chinese words, so
+# English tools like nltk's word_tokenize or textstat's syllable-based
+# readability formulas don't apply). Metrics here are simple, transparent
+# proxies (utterance length, connector use, aspect-marker use, vocabulary
+# diversity) — not a validated linguistic analysis.
+
+CONNECTOR_MARKERS = [
+    '因为', '所以', '但是', '可是', '虽然', '如果', '不但', '而且',
+    '除了', '后来', '首先', '其次', '另外', '于是', '因此', '不过'
+]
+ASPECT_MARKERS = ('了', '过', '着')
+FILLER_MARKERS = ['嗯', '呃', '那个', '就是', '然后', '这个']
+
+MIN_MINUTES_FOR_ACTFL = 5
+MIN_USER_TURNS_FOR_ACTFL = 4
+
+
+def _parse_timestamp(ts):
+    """Parse a client-side ISO timestamp (e.g. '...Z') into a datetime, or None."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+
+def compute_duration_minutes(conversation):
+    """Elapsed time between the first and last logged message, in minutes."""
+    timestamps = [_parse_timestamp(m.get('timestamp')) for m in conversation]
+    timestamps = [t for t in timestamps if t is not None]
+    if len(timestamps) < 2:
+        return None
+    return (max(timestamps) - min(timestamps)).total_seconds() / 60.0
+
 
 def analyze_conversation_metrics(conversation):
     """
-    Analyze conversation using Python NLP packages to generate linguistic metrics.
+    Analyze a Mandarin conversation using jieba-based Chinese NLP.
     Returns a formatted analysis report as a string.
     """
     if not ANALYSIS_AVAILABLE:
         return generate_basic_analysis(conversation)
-    
-    # Separate user and assistant turns
+
     user_turns = [msg['text'] for msg in conversation if msg['role'] == 'user']
     assistant_turns = [msg['text'] for msg in conversation if msg['role'] == 'assistant']
-    
-    # Combine all user text
     user_text = ' '.join(user_turns)
-    
-    # Basic counts
-    total_turns = len(conversation)
-    user_turn_count = len(user_turns)
-    assistant_turn_count = len(assistant_turns)
-    
-    # Analyze user language
+
+    basic = analyze_basic_stats(user_text, user_turns)
+    words_list = [w for w in jieba.cut(user_text) if re.search(r'[一-鿿]', w)]
+    complexity = analyze_complexity(user_text, words_list)
+    fluency = analyze_fluency(user_turns)
+    vocab = analyze_vocabulary(user_text)
+
+    turn_taking = {
+        'total_turns': len(conversation),
+        'user_turns': len(user_turns),
+        'assistant_turns': len(assistant_turns),
+        'avg_words_per_user_turn': basic['avg_words_per_turn']
+    }
+
+    duration_minutes = compute_duration_minutes(conversation)
+
+    actfl_estimate = None
+    actfl_note = None
+    if duration_minutes is None:
+        actfl_note = "Couldn't determine how long this conversation lasted, so no proficiency estimate was generated."
+    elif duration_minutes < MIN_MINUTES_FOR_ACTFL:
+        actfl_note = (
+            f"This conversation was about {duration_minutes:.1f} minute(s) long. "
+            f"Talk for at least {MIN_MINUTES_FOR_ACTFL} minutes to get an ACTFL-informed level estimate."
+        )
+    elif turn_taking['user_turns'] < MIN_USER_TURNS_FOR_ACTFL:
+        actfl_note = "Not enough learner turns yet for a reliable estimate — keep the conversation going a bit longer."
+    else:
+        actfl_estimate = estimate_actfl_level(basic, vocab, complexity, turn_taking)
+
     analysis = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'basic_stats': analyze_basic_stats(user_text, user_turns),
-        'complexity_metrics': analyze_complexity(user_text),
-        'fluency_metrics': analyze_fluency(user_turns),
-        'vocabulary_metrics': analyze_vocabulary(user_text),
-        'turn_taking': {
-            'total_turns': total_turns,
-            'user_turns': user_turn_count,
-            'assistant_turns': assistant_turn_count,
-            'avg_words_per_user_turn': sum(len(turn.split()) for turn in user_turns) / max(user_turn_count, 1)
-        }
+        'duration_minutes': duration_minutes,
+        'basic_stats': basic,
+        'complexity_metrics': complexity,
+        'fluency_metrics': fluency,
+        'vocabulary_metrics': vocab,
+        'turn_taking': turn_taking,
+        'actfl_estimate': actfl_estimate,
+        'actfl_note': actfl_note
     }
-    
+
     return format_analysis_report(analysis, conversation)
 
+
 def analyze_basic_stats(text, turns):
-    """Calculate basic text statistics."""
-    words = word_tokenize(text.lower())
-    sentences = sent_tokenize(text)
-    
-    # Remove punctuation from words
-    words_only = [w for w in words if w.isalnum()]
-    
+    """Calculate basic Chinese text statistics (characters, jieba words, sentences)."""
+    hanzi = re.findall(r'[一-鿿]', text)
+    words = [w for w in jieba.cut(text) if re.search(r'[一-鿿]', w)]
+    sentences = [s for s in re.split(r'[。！？!?.]+', text) if s.strip()]
+
     return {
-        'total_words': len(words_only),
+        'total_characters': len(hanzi),
+        'total_words': len(words),
         'total_sentences': len(sentences),
         'total_turns': len(turns),
-        'avg_words_per_sentence': len(words_only) / max(len(sentences), 1),
-        'avg_words_per_turn': len(words_only) / max(len(turns), 1)
+        'avg_words_per_sentence': len(words) / max(len(sentences), 1),
+        'avg_words_per_turn': len(words) / max(len(turns), 1),
+        'avg_characters_per_word': len(hanzi) / max(len(words), 1)
     }
 
-def analyze_complexity(text):
-    """Analyze text complexity using various readability metrics."""
+
+def analyze_complexity(text, words):
+    """Proxies for sentence-linking / narration complexity (no English readability formulas apply)."""
     if not text.strip():
         return {}
-    
-    try:
-        return {
-            'flesch_reading_ease': round(textstat.flesch_reading_ease(text), 2),
-            'flesch_kincaid_grade': round(textstat.flesch_kincaid_grade(text), 2),
-            'gunning_fog': round(textstat.gunning_fog(text), 2),
-            'automated_readability_index': round(textstat.automated_readability_index(text), 2),
-            'coleman_liau_index': round(textstat.coleman_liau_index(text), 2),
-            'avg_syllables_per_word': round(textstat.avg_syllables_per_word(text), 2),
-            'difficult_words': textstat.difficult_words(text)
-        }
-    except:
-        return {}
+
+    connector_count = sum(text.count(marker) for marker in CONNECTOR_MARKERS)
+    connectors_used = sorted({marker for marker in CONNECTOR_MARKERS if marker in text})
+    aspect_marker_count = sum(1 for w in words if w in ASPECT_MARKERS)
+
+    return {
+        'connector_count': connector_count,
+        'connectors_used': connectors_used,
+        'aspect_marker_count': aspect_marker_count,
+        'avg_characters_per_word': round(sum(len(w) for w in words) / max(len(words), 1), 2)
+    }
+
 
 def analyze_fluency(turns):
-    """Analyze fluency metrics including false starts, fillers, etc."""
-    filler_words = ['um', 'uh', 'like', 'you know', 'i mean', 'sort of', 'kind of', 
-                    'actually', 'basically', 'literally', 'well', 'so', 'okay', 'right']
-    
+    """Filler-word and hesitation/repetition metrics for Mandarin speech."""
     total_fillers = 0
-    total_words = 0
+    total_chars = 0
     hesitations = 0
-    
+
     for turn in turns:
-        words = turn.lower().split()
-        total_words += len(words)
-        
-        # Count fillers
-        for filler in filler_words:
-            if ' ' in filler:
-                total_fillers += turn.lower().count(filler)
-            else:
-                total_fillers += words.count(filler)
-        
-        # Count hesitations (repeated words)
-        for i in range(len(words) - 1):
-            if words[i] == words[i + 1] and words[i].isalnum():
+        total_chars += len(re.findall(r'[一-鿿]', turn))
+
+        for filler in FILLER_MARKERS:
+            total_fillers += turn.count(filler)
+
+        toks = [w for w in jieba.cut(turn) if re.search(r'[一-鿿]', w)]
+        for i in range(len(toks) - 1):
+            if toks[i] == toks[i + 1]:
                 hesitations += 1
-    
+
     return {
         'total_filler_words': total_fillers,
-        'filler_word_rate': round(total_fillers / max(total_words, 1) * 100, 2),
+        'filler_word_rate_per_100_chars': round(total_fillers / max(total_chars, 1) * 100, 2),
         'hesitations_repetitions': hesitations
     }
 
+
 def analyze_vocabulary(text):
-    """Analyze vocabulary diversity and sophistication."""
-    words = word_tokenize(text.lower())
-    words_only = [w for w in words if w.isalnum()]
-    
-    if not words_only:
+    """Vocabulary diversity and a jieba-POS-based word-type breakdown."""
+    words = [w for w in jieba.cut(text) if re.search(r'[一-鿿]', w)]
+    if not words:
         return {}
-    
-    # Unique words
-    unique_words = set(words_only)
-    
-    # Type-Token Ratio (vocabulary diversity)
-    ttr = len(unique_words) / len(words_only)
-    
-    # POS tagging
+
+    unique_words = set(words)
+    ttr = len(unique_words) / len(words)
+
     try:
-        pos_tags = nltk.pos_tag(words_only)
-        pos_counts = Counter([tag for word, tag in pos_tags])
-        
-        # Count different word types
-        verbs = sum(count for tag, count in pos_counts.items() if tag.startswith('VB'))
-        nouns = sum(count for tag, count in pos_counts.items() if tag.startswith('NN'))
-        adjectives = sum(count for tag, count in pos_counts.items() if tag.startswith('JJ'))
-        adverbs = sum(count for tag, count in pos_counts.items() if tag.startswith('RB'))
-    except:
-        verbs = nouns = adjectives = adverbs = 0
-    
-    # Most common words
-    word_freq = Counter(words_only)
+        pos_pairs = list(pseg.cut(text))
+        pos_counts = Counter(flag for word, flag in pos_pairs if re.search(r'[一-鿿]', word))
+        nouns = sum(c for tag, c in pos_counts.items() if tag.startswith('n'))
+        verbs = sum(c for tag, c in pos_counts.items() if tag.startswith('v'))
+        adjectives = sum(c for tag, c in pos_counts.items() if tag.startswith('a'))
+        adverbs = sum(c for tag, c in pos_counts.items() if tag.startswith('d'))
+    except Exception:
+        nouns = verbs = adjectives = adverbs = 0
+
+    word_freq = Counter(words)
     most_common = word_freq.most_common(10)
-    
+
     return {
         'total_unique_words': len(unique_words),
         'type_token_ratio': round(ttr, 3),
         'lexical_density': round(ttr * 100, 2),
-        'verbs': verbs,
         'nouns': nouns,
+        'verbs': verbs,
         'adjectives': adjectives,
         'adverbs': adverbs,
         'most_common_words': most_common
     }
 
+
+def estimate_actfl_level(basic, vocab, complexity, turn_taking):
+    """
+    A rough, automated, single-conversation ACTFL-INFORMED estimate built from
+    surface-level proxies that loosely track ACTFL Speaking Guidelines
+    discourse-level descriptors (Novice = words/phrases/memorized chunks;
+    Intermediate = discrete sentences and strings of sentences on familiar
+    topics; Advanced = connected, paragraph-length discourse across time
+    frames). This is NOT a validated OPI rating — no automated text analysis
+    can substitute for a trained rater — and should be treated as a rough,
+    informal signal for reflection, not a placement decision.
+    """
+    total_words = basic.get('total_words', 0)
+    avg_words_per_turn = basic.get('avg_words_per_turn', 0)
+    sentence_count = basic.get('total_sentences', 0)
+    user_turns = turn_taking.get('user_turns', 0)
+    ttr = vocab.get('type_token_ratio', 0)
+    connector_count = complexity.get('connector_count', 0)
+    aspect_count = complexity.get('aspect_marker_count', 0)
+
+    breakdown = []
+    points = 0
+
+    if avg_words_per_turn < 3: p = 0
+    elif avg_words_per_turn < 6: p = 1
+    elif avg_words_per_turn < 12: p = 2
+    elif avg_words_per_turn < 20: p = 3
+    else: p = 4
+    points += p
+    breakdown.append(("Avg. words per turn (utterance length)", f"{avg_words_per_turn:.1f}", p, 4))
+
+    sent_per_turn = sentence_count / max(user_turns, 1)
+    if sent_per_turn < 1.0: p = 0
+    elif sent_per_turn < 1.5: p = 1
+    else: p = 2
+    points += p
+    breakdown.append(("Sentences per turn (single words/phrases vs. strings of sentences)", f"{sent_per_turn:.2f}", p, 2))
+
+    conn_per_100 = connector_count / max(total_words, 1) * 100
+    if conn_per_100 == 0: p = 0
+    elif conn_per_100 < 1: p = 1
+    elif conn_per_100 < 3: p = 2
+    else: p = 3
+    points += p
+    breakdown.append(("Connectors per 100 words (因为/所以/但是/虽然...)", f"{conn_per_100:.1f}", p, 3))
+
+    asp_per_100 = aspect_count / max(total_words, 1) * 100
+    if asp_per_100 == 0: p = 0
+    elif asp_per_100 < 2: p = 1
+    else: p = 2
+    points += p
+    breakdown.append(("Aspect markers per 100 words (了/过/着 — narrating across time)", f"{asp_per_100:.1f}", p, 2))
+
+    if ttr < 0.3: p = 0
+    elif ttr < 0.45: p = 1
+    else: p = 2
+    points += p
+    breakdown.append(("Vocabulary diversity (type-token ratio)", f"{ttr:.3f}", p, 2))
+
+    max_points = 4 + 2 + 3 + 2 + 2  # 13
+
+    bands = [
+        (0, 2, "Novice-Low"), (3, 4, "Novice-Mid"), (5, 5, "Novice-High"),
+        (6, 7, "Intermediate-Low"), (8, 9, "Intermediate-Mid"), (10, 10, "Intermediate-High"),
+        (11, 11, "Advanced-Low"), (12, 12, "Advanced-Mid"), (13, 13, "Advanced-High"),
+    ]
+    level = next(name for lo, hi, name in bands if lo <= points <= hi)
+
+    return {
+        'level': level,
+        'score': points,
+        'max_score': max_points,
+        'breakdown': breakdown
+    }
+
+
 def format_analysis_report(analysis, conversation):
     """Format the analysis into a readable text report."""
     report = []
-    
+
     # Header
     report.append("=" * 80)
     report.append("CONVERSATION ANALYSIS REPORT")
     report.append("=" * 80)
     report.append(f"Generated: {analysis['timestamp']}")
+    if analysis.get('duration_minutes') is not None:
+        report.append(f"Conversation Duration: {analysis['duration_minutes']:.1f} minute(s)")
     report.append("")
-    
+
     # Basic Statistics
     report.append("-" * 80)
     report.append("BASIC STATISTICS")
     report.append("-" * 80)
     bs = analysis['basic_stats']
-    report.append(f"Total Words (Student): {bs['total_words']}")
+    report.append(f"Total Characters (Student): {bs['total_characters']}")
+    report.append(f"Total Words (jieba-segmented): {bs['total_words']}")
     report.append(f"Total Sentences: {bs['total_sentences']}")
     report.append(f"Total Turns: {bs['total_turns']}")
     report.append(f"Average Words per Sentence: {bs['avg_words_per_sentence']:.2f}")
     report.append(f"Average Words per Turn: {bs['avg_words_per_turn']:.2f}")
+    report.append(f"Average Characters per Word: {bs['avg_characters_per_word']:.2f}")
     report.append("")
-    
+
     # Turn-taking
     report.append("-" * 80)
     report.append("TURN-TAKING ANALYSIS")
@@ -761,89 +551,102 @@ def format_analysis_report(analysis, conversation):
     report.append(f"Bot Turns: {tt['assistant_turns']}")
     report.append(f"Average Words per Student Turn: {tt['avg_words_per_user_turn']:.2f}")
     report.append("")
-    
+
     # Complexity Metrics
     if analysis['complexity_metrics']:
         report.append("-" * 80)
-        report.append("COMPLEXITY METRICS")
+        report.append("COMPLEXITY / DISCOURSE METRICS")
         report.append("-" * 80)
         cm = analysis['complexity_metrics']
-        if 'flesch_reading_ease' in cm:
-            report.append(f"Flesch Reading Ease: {cm['flesch_reading_ease']}")
-            report.append("  (0-30: Very Difficult, 60-70: Standard, 90-100: Very Easy)")
-        if 'flesch_kincaid_grade' in cm:
-            report.append(f"Flesch-Kincaid Grade Level: {cm['flesch_kincaid_grade']}")
-        if 'gunning_fog' in cm:
-            report.append(f"Gunning Fog Index: {cm['gunning_fog']}")
-        if 'automated_readability_index' in cm:
-            report.append(f"Automated Readability Index: {cm['automated_readability_index']}")
-        if 'coleman_liau_index' in cm:
-            report.append(f"Coleman-Liau Index: {cm['coleman_liau_index']}")
-        if 'avg_syllables_per_word' in cm:
-            report.append(f"Average Syllables per Word: {cm['avg_syllables_per_word']}")
-        if 'difficult_words' in cm:
-            report.append(f"Difficult Words Count: {cm['difficult_words']}")
+        report.append(f"Connector Uses (因为/所以/但是/虽然/如果...): {cm['connector_count']}")
+        if cm['connectors_used']:
+            report.append(f"  Connectors used: {'、'.join(cm['connectors_used'])}")
+        report.append(f"Aspect Marker Uses (了/过/着): {cm['aspect_marker_count']}")
+        report.append(f"Average Characters per Word: {cm['avg_characters_per_word']}")
         report.append("")
-    
+
     # Fluency Metrics
     report.append("-" * 80)
     report.append("FLUENCY METRICS")
     report.append("-" * 80)
     fm = analysis['fluency_metrics']
-    report.append(f"Total Filler Words: {fm['total_filler_words']}")
-    report.append(f"Filler Word Rate: {fm['filler_word_rate']}%")
+    report.append(f"Total Filler Words (嗯/呃/那个/就是/然后/这个): {fm['total_filler_words']}")
+    report.append(f"Filler Word Rate: {fm['filler_word_rate_per_100_chars']} per 100 characters")
     report.append(f"Hesitations/Repetitions: {fm['hesitations_repetitions']}")
     report.append("")
-    
+
     # Vocabulary Metrics
     if analysis['vocabulary_metrics']:
         report.append("-" * 80)
         report.append("VOCABULARY METRICS")
         report.append("-" * 80)
         vm = analysis['vocabulary_metrics']
-        if 'total_unique_words' in vm:
-            report.append(f"Total Unique Words: {vm['total_unique_words']}")
-        if 'type_token_ratio' in vm:
-            report.append(f"Type-Token Ratio (TTR): {vm['type_token_ratio']}")
-            report.append(f"Lexical Density: {vm['lexical_density']}%")
-        if 'verbs' in vm:
-            report.append(f"\nWord Type Distribution:")
-            report.append(f"  Verbs: {vm['verbs']}")
-            report.append(f"  Nouns: {vm['nouns']}")
-            report.append(f"  Adjectives: {vm['adjectives']}")
-            report.append(f"  Adverbs: {vm['adverbs']}")
-        if 'most_common_words' in vm and vm['most_common_words']:
+        report.append(f"Total Unique Words: {vm['total_unique_words']}")
+        report.append(f"Type-Token Ratio (TTR): {vm['type_token_ratio']}")
+        report.append(f"Lexical Density: {vm['lexical_density']}%")
+        report.append(f"\nWord Type Distribution (jieba POS):")
+        report.append(f"  Nouns: {vm['nouns']}")
+        report.append(f"  Verbs: {vm['verbs']}")
+        report.append(f"  Adjectives: {vm['adjectives']}")
+        report.append(f"  Adverbs: {vm['adverbs']}")
+        if vm['most_common_words']:
             report.append(f"\nMost Common Words:")
             for word, count in vm['most_common_words']:
                 report.append(f"  {word}: {count}")
         report.append("")
-    
+
+    # ACTFL-informed estimate
+    report.append("-" * 80)
+    report.append("AUTOMATED ACTFL-INFORMED ESTIMATE (EXPERIMENTAL)")
+    report.append("-" * 80)
+    if analysis.get('actfl_estimate'):
+        est = analysis['actfl_estimate']
+        report.append(f"Estimated Level: {est['level']}")
+        report.append(f"Score: {est['score']} / {est['max_score']}")
+        report.append("")
+        report.append("Breakdown:")
+        for label, value, pts, max_pts in est['breakdown']:
+            report.append(f"  {label}: {value}  →  {pts}/{max_pts} pts")
+        report.append("")
+        report.append(
+            "IMPORTANT: This is an automated, single-conversation estimate based on "
+            "surface-level features (utterance length, sentence-linking, aspect-marker "
+            "use, vocabulary diversity). It is NOT a validated ACTFL OPI rating and does "
+            "not assess grammatical accuracy, pronunciation, or task/functional "
+            "performance the way a trained human rater would. Treat it as an informal "
+            "conversation starter, not a placement or grading decision."
+        )
+    else:
+        report.append(analysis.get('actfl_note', 'No estimate available.'))
+    report.append("")
+
     # Transcript
     report.append("=" * 80)
     report.append("FULL CONVERSATION TRANSCRIPT")
     report.append("=" * 80)
     report.append("")
-    
+
     for i, msg in enumerate(conversation, 1):
         role = "STUDENT" if msg['role'] == 'user' else "BOT"
         report.append(f"[Turn {i}] {role}:")
         report.append(f"{msg['text']}")
         report.append("")
-    
+
     report.append("=" * 80)
     report.append("END OF REPORT")
     report.append("=" * 80)
-    
+
     return '\n'.join(report)
 
+
 def generate_basic_analysis(conversation):
-    """Generate a basic analysis when NLP packages are not available."""
+    """Generate a basic analysis when jieba is not available."""
     user_turns = [msg['text'] for msg in conversation if msg['role'] == 'user']
-    user_text = ' '.join(user_turns)
-    
-    word_count = len(user_text.split())
-    sentence_count = user_text.count('.') + user_text.count('!') + user_text.count('?')
-    
+    user_text = ''.join(user_turns)
+
+    char_count = len(re.findall(r'[一-鿿]', user_text))
+    sentence_count = len([s for s in re.split(r'[。！？!?.]+', user_text) if s.strip()])
+
     report = []
     report.append("=" * 80)
     report.append("CONVERSATION ANALYSIS REPORT (Basic)")
@@ -853,35 +656,34 @@ def generate_basic_analysis(conversation):
     report.append("⚠️  NOTE: Advanced analysis unavailable.")
     if NLP_ERROR_MESSAGE:
         report.append(f"Error: {NLP_ERROR_MESSAGE}")
-    report.append("To enable full analysis, ensure textstat and nltk are installed:")
-    report.append("  pip install textstat nltk")
+    report.append("To enable full analysis, ensure jieba is installed:")
+    report.append("  pip install jieba")
     report.append("")
     report.append("For debugging, visit: /debug/nlp on your server")
     report.append("")
     report.append("-" * 80)
     report.append("BASIC STATISTICS")
     report.append("-" * 80)
-    report.append(f"Total Words (Student): {word_count}")
+    report.append(f"Total Characters (Student): {char_count}")
     report.append(f"Estimated Sentences: {sentence_count}")
     report.append(f"Student Turns: {len(user_turns)}")
     report.append("")
-    
+
     # Transcript
     report.append("=" * 80)
     report.append("FULL CONVERSATION TRANSCRIPT")
     report.append("=" * 80)
     report.append("")
-    
+
     for i, msg in enumerate(conversation, 1):
         role = "STUDENT" if msg['role'] == 'user' else "BOT"
         report.append(f"[Turn {i}] {role}:")
         report.append(f"{msg['text']}")
         report.append("")
-    
+
     return '\n'.join(report)
 
 # --------------------------- Flask App ---------------------------
-
 app = Flask(__name__)
 CORS(app)
 
@@ -891,47 +693,24 @@ def index():
 
 @app.route("/debug/nlp")
 def debug_nlp():
-    """Debug endpoint to check NLP package status"""
+    """Debug endpoint to check Chinese NLP (jieba) package status"""
     status = {
         "analysis_available": ANALYSIS_AVAILABLE,
         "error_message": NLP_ERROR_MESSAGE,
         "packages": {}
     }
-    
+
     try:
-        import textstat
-        status["packages"]["textstat"] = textstat.__version__ if hasattr(textstat, '__version__') else "installed"
+        import jieba
+        status["packages"]["jieba"] = getattr(jieba, "__version__", "installed")
+        try:
+            import jieba.posseg  # noqa: F401
+            status["packages"]["jieba.posseg"] = "available"
+        except ImportError:
+            status["packages"]["jieba.posseg"] = "NOT AVAILABLE"
     except ImportError:
-        status["packages"]["textstat"] = "NOT INSTALLED"
-    
-    try:
-        import nltk
-        status["packages"]["nltk"] = nltk.__version__
-        status["nltk_data_path"] = nltk.data.path
-        
-        # Check NLTK data
-        status["nltk_data"] = {}
-        try:
-            nltk.data.find('tokenizers/punkt')
-            status["nltk_data"]["punkt"] = "found"
-        except LookupError:
-            status["nltk_data"]["punkt"] = "MISSING"
-        
-        try:
-            nltk.data.find('corpora/stopwords')
-            status["nltk_data"]["stopwords"] = "found"
-        except LookupError:
-            status["nltk_data"]["stopwords"] = "MISSING"
-        
-        try:
-            nltk.data.find('taggers/averaged_perceptron_tagger')
-            status["nltk_data"]["pos_tagger"] = "found"
-        except LookupError:
-            status["nltk_data"]["pos_tagger"] = "MISSING"
-            
-    except ImportError:
-        status["packages"]["nltk"] = "NOT INSTALLED"
-    
+        status["packages"]["jieba"] = "NOT INSTALLED"
+
     return jsonify(status)
 
 
@@ -946,6 +725,21 @@ You are: {bot['role']}
 Your task: {bot['task']}
 Constraints: {bot['constraints']}
 Language hint: {bot.get('language_hint', 'English')}
+
+GLOBAL ACCENT RULE (applies no matter what any character bio above says):
+Speak with a standard Mainland/Northern Mandarin accent (标准普通话，偏北方/北京口音).
+Do NOT use a Taiwanese Mandarin accent (台湾腔) or vocabulary/intonation patterns
+distinctive of Taiwan Mandarin, and do not use a strong regional topolect accent.
+
+GLOBAL SPEECH-LEVEL RULE (this OVERRIDES any conflicting level guidance above):
+You are speaking with a Novice-High to Intermediate-Low CFL learner (roughly
+HSK 1-2 / first- or second-year university Chinese class level). Speak
+noticeably slower than normal conversational speed, with clear pauses
+between phrases. Use only high-frequency, textbook-level vocabulary and
+short, simple sentence patterns (basic SVO, simple time/place phrases).
+Avoid compound/complex sentences, idioms, chengyu (成语), slang, and
+low-frequency vocabulary. If the learner seems lost, simplify and rephrase
+rather than repeating the same sentence verbatim.
 """
     session_payload = {
         "session": {
