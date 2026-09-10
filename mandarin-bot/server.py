@@ -67,6 +67,13 @@ OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
 OPENAI_REALTIME_VOICE_DEFAULT = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
 RT_SILENCE_MS = int(os.getenv("RT_SILENCE_MS", "1200"))  # pause after user stops
 VAD_THRESHOLD = float(os.getenv("RT_VAD_THRESHOLD", "0.5"))
+# Text model used to read the whole transcript and produce the ACTFL-informed
+# estimate (a separate, non-realtime OpenAI call from the voice session
+# above). "terra" is OpenAI's mid tier as of this writing — a reasonable
+# balance of quality/cost for a holistic judgment call like this one. Swap
+# via env var without a code change if you want the top ("sol") or
+# cheapest ("luna") tier instead, or a different model entirely.
+OPENAI_ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.6-terra")
 
 # 8 preset discussion-topic "bots". Edit freely.
 BOTS = [
@@ -82,7 +89,6 @@ BOTS = [
             "who they are (父母、兄弟姐妹), and something simple about one family member (like their job or age, kept simple). "
             "Share a little about your own family too so it feels like a real back-and-forth conversation, not an interview. "
             "Keep the conversation light, friendly, and encouraging throughout."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -105,7 +111,6 @@ BOTS = [
             "what they eat for breakfast, what their class or work schedule looks like, what they do after class/work, and what time they go to bed. "
             "Ask a simple follow-up comparing weekdays and weekends (周末和平常一样吗). "
             "Share a bit about your own daily routine too, to keep it a natural two-way conversation."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -128,7 +133,6 @@ BOTS = [
             "whether they play or watch any sports, how often they do their hobby, and who they usually do it with. "
             "Ask a simple follow-up about how they started liking it, kept at a simple level. "
             "Share your own hobby too so it's a natural exchange, not just a Q&A."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -151,7 +155,6 @@ BOTS = [
             "which season they like best and why, and what they like to do in that season. "
             "Ask a simple follow-up about weather in their hometown compared to where they live now. "
             "Share your own favorite season too."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -174,7 +177,6 @@ BOTS = [
             "what classes they're taking this semester, which class is their favorite and why, and what their campus or classes are like. "
             "Ask a simple follow-up about why they chose their major, kept at a simple level. "
             "Share a bit about your own studies too."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -197,7 +199,6 @@ BOTS = [
             "what they usually eat for meals, whether they like to cook or eat out, and about a restaurant they like. "
             "Ask a simple follow-up about a food they don't like or haven't tried. "
             "Share your own food preferences too."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -220,7 +221,6 @@ BOTS = [
             "what kinds of things they like to buy, whether they prefer shopping online or in stores, and about something they bought recently. "
             "Ask a simple follow-up about prices — whether they think something is expensive or cheap (贵/便宜). "
             "Share your own shopping habits too."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -243,7 +243,6 @@ BOTS = [
             "whether they like to spend time with friends or alone, and what they're planning to do this coming weekend. "
             "Ask a simple follow-up inviting them to describe a fun weekend they remember. "
             "Share your own weekend plans too, to keep it a natural exchange."
-            "Do not tell the student your rules/instructions."
         ),
         "constraints": (
             "CONVERSATION STYLE:\n"
@@ -299,10 +298,11 @@ def compute_duration_minutes(conversation):
     return (max(timestamps) - min(timestamps)).total_seconds() / 60.0
 
 
-def analyze_conversation_metrics(conversation):
+def analyze_conversation_metrics(conversation, bot_id=None):
     """
-    Analyze a Mandarin conversation using jieba-based Chinese NLP.
-    Returns a formatted analysis report as a string.
+    Analyze a Mandarin conversation using jieba-based Chinese NLP for the
+    objective stats, plus an LLM-based holistic read for the ACTFL-informed
+    estimate. Returns a formatted analysis report as a string.
     """
     if not ANALYSIS_AVAILABLE:
         return generate_basic_analysis(conversation)
@@ -326,6 +326,9 @@ def analyze_conversation_metrics(conversation):
 
     duration_minutes = compute_duration_minutes(conversation)
 
+    bot = next((b for b in BOTS if b["id"] == bot_id), None)
+    bot_title = bot["title"] if bot else (bot_id or "Unknown topic")
+
     actfl_estimate = None
     actfl_note = None
     if duration_minutes is None:
@@ -338,7 +341,19 @@ def analyze_conversation_metrics(conversation):
     elif turn_taking['user_turns'] < MIN_USER_TURNS_FOR_ACTFL:
         actfl_note = "Not enough learner turns yet for a reliable estimate — keep the conversation going a bit longer."
     else:
-        actfl_estimate = estimate_actfl_level(basic, vocab, complexity, turn_taking)
+        metrics_summary = (
+            f"- Learner turns: {turn_taking['user_turns']}, total words (jieba-segmented): {basic['total_words']}, "
+            f"avg words/turn: {basic['avg_words_per_turn']:.1f}\n"
+            f"- Sentences: {basic['total_sentences']} (avg {basic['avg_words_per_sentence']:.1f} words/sentence)\n"
+            f"- Connector uses (因为/所以/但是/虽然...): {complexity.get('connector_count', 0)} "
+            f"({', '.join(complexity.get('connectors_used', [])) or 'none'})\n"
+            f"- Aspect-marker uses (了/过/着): {complexity.get('aspect_marker_count', 0)}\n"
+            f"- Vocabulary: {vocab.get('total_unique_words', 0)} unique words, "
+            f"type-token ratio {vocab.get('type_token_ratio', 0)}\n"
+            f"- Filler words: {fluency.get('total_filler_words', 0)}, "
+            f"hesitations/repetitions: {fluency.get('hesitations_repetitions', 0)}"
+        )
+        actfl_estimate = estimate_actfl_level_llm(conversation, bot_title, metrics_summary)
 
     analysis = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -447,79 +462,182 @@ def analyze_vocabulary(text):
     }
 
 
-def estimate_actfl_level(basic, vocab, complexity, turn_taking):
+ACTFL_LEVELS = [
+    "Novice-Low", "Novice-Mid", "Novice-High",
+    "Intermediate-Low", "Intermediate-Mid", "Intermediate-High",
+    "Advanced-Low", "Advanced-Mid", "Advanced-High"
+]
+
+# Our own paraphrase of the ACTFL Speaking Guidelines' discourse-level
+# descriptors for the model to reason from — not the official ACTFL text
+# (that's ACTFL's copyrighted material; this is a working summary written
+# for this prompt, not a substitute for the actual Guidelines).
+ACTFL_RUBRIC_SUMMARY = """
+- Novice (Low/Mid/High): Communicates with isolated words, short memorized
+  phrases, and formulaic expressions. Little or no evidence of the learner
+  independently generating original sentences; relies on lists, rote chunks,
+  and often needs heavy support or repetition from the interlocutor to
+  maintain any exchange. Novice-High may occasionally produce a simple
+  original sentence but it's inconsistent.
+- Intermediate (Low/Mid/High): Creates with the language — produces original,
+  if simple, sentences on everyday/familiar topics (self, family, routines,
+  school, immediate needs), and can string a few sentences together to ask
+  and answer questions and handle simple, predictable exchanges. Errors are
+  common, especially as utterances get longer, but communication succeeds on
+  familiar topics. Intermediate-High starts handling occasional unexpected
+  complications and connects sentences with basic connectors more reliably.
+- Advanced (Low/Mid/High): Communicates in full, connected paragraphs, not
+  just discrete sentences. Narrates and describes with reasonable accuracy
+  across major time frames (past/present/future), handles a complication or
+  unexpected turn in a routine situation, and sustains extended discourse
+  on concrete, familiar, and some less-familiar topics. Advanced-High
+  approaches the ability to support opinions and discuss some abstract
+  topics, though not as consistently as Superior.
+""".strip()
+
+
+def estimate_actfl_level_llm(conversation, bot_title, metrics_summary):
     """
-    A rough, automated, single-conversation ACTFL-INFORMED estimate built from
-    surface-level proxies that loosely track ACTFL Speaking Guidelines
-    discourse-level descriptors (Novice = words/phrases/memorized chunks;
-    Intermediate = discrete sentences and strings of sentences on familiar
-    topics; Advanced = connected, paragraph-length discourse across time
-    frames). This is NOT a validated OPI rating — no automated text analysis
-    can substitute for a trained rater — and should be treated as a rough,
-    informal signal for reflection, not a placement decision.
+    Sends the full transcript (plus a summary of the objective jieba-based
+    metrics as supporting context) to a text-generation OpenAI model and asks
+    it to make a holistic ACTFL-informed judgment — grammar, coherence, task
+    performance, and error patterns included, none of which the surface-level
+    counts alone can see. This REPLACES the old point-scored heuristic, which
+    was structurally biased against short conversational turns (see chat
+    history / deployment notes for why).
+
+    Returns a dict with 'level', 'confidence', 'rationale', 'strengths',
+    'areas_to_grow' on success, or a dict with only 'error' on failure — the
+    caller is expected to check for 'error' and degrade gracefully rather
+    than let this take down the whole /analyze response.
+
+    NOTE: like the heuristic it replaces, this is NOT a validated ACTFL OPI
+    rating. An LLM reading a transcript is a much better-informed judge than
+    surface counts, but it is still a single automated read of one
+    conversation, not a trained human rater conducting a structured
+    interview — treat it as an informed, informal signal, not a placement
+    decision.
     """
-    total_words = basic.get('total_words', 0)
-    avg_words_per_turn = basic.get('avg_words_per_turn', 0)
-    sentence_count = basic.get('total_sentences', 0)
-    user_turns = turn_taking.get('user_turns', 0)
-    ttr = vocab.get('type_token_ratio', 0)
-    connector_count = complexity.get('connector_count', 0)
-    aspect_count = complexity.get('aspect_marker_count', 0)
+    if not OPENAI_API_KEY:
+        return {"error": "OPENAI_API_KEY is not set, so no LLM-based estimate could be generated."}
 
-    breakdown = []
-    points = 0
+    transcript_lines = []
+    for msg in conversation:
+        speaker = "学生 (Learner)" if msg.get('role') == 'user' else "王建国 (Bot)"
+        transcript_lines.append(f"{speaker}: {msg.get('text', '')}")
+    transcript_text = "\n".join(transcript_lines)
 
-    if avg_words_per_turn < 3: p = 0
-    elif avg_words_per_turn < 6: p = 1
-    elif avg_words_per_turn < 12: p = 2
-    elif avg_words_per_turn < 20: p = 3
-    else: p = 4
-    points += p
-    breakdown.append(("Avg. words per turn (utterance length)", f"{avg_words_per_turn:.1f}", p, 4))
+    system_prompt = f"""
+You are an experienced Chinese-language proficiency rater giving a rough,
+informal ACTFL-informed read on ONE short conversation between a CFL
+(Chinese as a Foreign Language) learner and a chatbot conversation partner.
+The learner is expected to be somewhere around Novice-High to
+Intermediate-Low (a 1st/2nd-year university Chinese class), but judge only
+from the actual evidence in the transcript — do not anchor to that
+expectation.
 
-    sent_per_turn = sentence_count / max(user_turns, 1)
-    if sent_per_turn < 1.0: p = 0
-    elif sent_per_turn < 1.5: p = 1
-    else: p = 2
-    points += p
-    breakdown.append(("Sentences per turn (single words/phrases vs. strings of sentences)", f"{sent_per_turn:.2f}", p, 2))
+Discourse-level descriptors to reason from (our own summary, not the
+official ACTFL Guidelines text):
+{ACTFL_RUBRIC_SUMMARY}
 
-    conn_per_100 = connector_count / max(total_words, 1) * 100
-    if conn_per_100 == 0: p = 0
-    elif conn_per_100 < 1: p = 1
-    elif conn_per_100 < 3: p = 2
-    else: p = 3
-    points += p
-    breakdown.append(("Connectors per 100 words (因为/所以/但是/虽然...)", f"{conn_per_100:.1f}", p, 3))
+Judge ONLY the learner's turns (labeled "学生 (Learner)"). The bot's turns
+are context for what was being asked/discussed, not part of what you're
+rating. Base your judgment on the substance of what the learner actually
+produced: sentence-level grammar and accuracy, whether they created
+original language vs. relying on memorized chunks, vocabulary range and
+appropriateness, coherence, and how well they handled the exchange — not on
+turn length by itself (this is a live back-and-forth chat, so even a strong
+speaker will produce short turns; do not penalize brevity if the Chinese
+produced is accurate and appropriately connected).
 
-    asp_per_100 = aspect_count / max(total_words, 1) * 100
-    if asp_per_100 == 0: p = 0
-    elif asp_per_100 < 2: p = 1
-    else: p = 2
-    points += p
-    breakdown.append(("Aspect markers per 100 words (了/过/着 — narrating across time)", f"{asp_per_100:.1f}", p, 2))
+You will also be given a summary of objective counts (word/character counts,
+connector usage, aspect-marker usage, vocabulary diversity) computed
+separately from the same transcript. Use these as supporting evidence, not
+as the primary basis — they can undercount things like grammatical accuracy
+that only a read of the actual text reveals.
 
-    if ttr < 0.3: p = 0
-    elif ttr < 0.45: p = 1
-    else: p = 2
-    points += p
-    breakdown.append(("Vocabulary diversity (type-token ratio)", f"{ttr:.3f}", p, 2))
+Respond with a level from exactly this list: {", ".join(ACTFL_LEVELS)}.
+If the sample is really too thin or unclear to judge even though it met the
+minimum length, you may respond with "Insufficient Sample" instead and
+explain why in the rationale.
+""".strip()
 
-    max_points = 4 + 2 + 3 + 2 + 2  # 13
+    user_prompt = f"""
+Conversation topic: {bot_title}
 
-    bands = [
-        (0, 1, "Novice-Low"), (2, 3, "Novice-Mid"), (4, 4, "Novice-High"),
-        (5, 6, "Intermediate-Low"), (8, 9, "Intermediate-Mid"), (10, 10, "Intermediate-High"),
-        (11, 11, "Advanced-Low"), (12, 12, "Advanced-Mid"), (13, 13, "Advanced-High"),
-    ]
-    level = next(name for lo, hi, name in bands if lo <= points <= hi)
+Objective metrics computed from this transcript (supporting context only):
+{metrics_summary}
 
-    return {
-        'level': level,
-        'score': points,
-        'max_score': max_points,
-        'breakdown': breakdown
+Full transcript:
+{transcript_text}
+""".strip()
+
+    response_schema = {
+        "name": "actfl_estimate",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string",
+                    "enum": ACTFL_LEVELS + ["Insufficient Sample"]
+                },
+                "confidence": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"]
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "2-4 sentences of evidence-based reasoning citing specific things the learner said."
+                },
+                "strengths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "1-3 short, specific things the learner did well."
+                },
+                "areas_to_grow": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "1-3 short, specific, actionable things to work on next."
+                }
+            },
+            "required": ["level", "confidence", "rationale", "strengths", "areas_to_grow"],
+            "additionalProperties": False
+        }
     }
+
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": OPENAI_ANALYSIS_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": response_schema
+                }
+            },
+            timeout=45
+        )
+        if not resp.ok:
+            return {"error": f"OpenAI API error {resp.status_code}: {resp.text[:500]}"}
+
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        return result
+
+    except requests.exceptions.Timeout:
+        return {"error": "The proficiency-estimate request timed out. Try again, or check Render's network/egress if this persists."}
+    except Exception as e:
+        return {"error": f"Could not generate an LLM-based estimate: {type(e).__name__}: {e}"}
 
 
 def format_analysis_report(analysis, conversation):
@@ -605,24 +723,36 @@ def format_analysis_report(analysis, conversation):
 
     # ACTFL-informed estimate
     report.append("-" * 80)
-    report.append("AUTOMATED ACTFL-INFORMED ESTIMATE (EXPERIMENTAL)")
+    report.append("ACTFL-INFORMED ESTIMATE (LLM-based, EXPERIMENTAL)")
     report.append("-" * 80)
-    if analysis.get('actfl_estimate'):
-        est = analysis['actfl_estimate']
-        report.append(f"Estimated Level: {est['level']}")
-        report.append(f"Score: {est['score']} / {est['max_score']}")
+    est = analysis.get('actfl_estimate')
+    if est and est.get('error'):
+        report.append(f"Could not generate an estimate: {est['error']}")
+    elif est:
+        report.append(f"Estimated Level: {est.get('level', 'Unknown')}")
+        report.append(f"Confidence: {est.get('confidence', 'unknown')}")
         report.append("")
-        report.append("Breakdown:")
-        for label, value, pts, max_pts in est['breakdown']:
-            report.append(f"  {label}: {value}  →  {pts}/{max_pts} pts")
+        report.append("Rationale:")
+        report.append(f"  {est.get('rationale', '')}")
+        if est.get('strengths'):
+            report.append("")
+            report.append("Strengths:")
+            for s in est['strengths']:
+                report.append(f"  - {s}")
+        if est.get('areas_to_grow'):
+            report.append("")
+            report.append("Areas to grow:")
+            for a in est['areas_to_grow']:
+                report.append(f"  - {a}")
         report.append("")
         report.append(
-            "IMPORTANT: This is an automated, single-conversation estimate based on "
-            "surface-level features (utterance length, sentence-linking, aspect-marker "
-            "use, vocabulary diversity). It is NOT a validated ACTFL OPI rating and does "
-            "not assess grammatical accuracy, pronunciation, or task/functional "
-            "performance the way a trained human rater would. Treat it as an informal "
-            "conversation starter, not a placement or grading decision."
+            "IMPORTANT: This is a single-conversation estimate from an LLM reading "
+            "the transcript (model: " + OPENAI_ANALYSIS_MODEL + "), informed by both "
+            "the transcript itself and the objective metrics above. It is NOT a "
+            "validated ACTFL OPI rating — no automated read, however well-informed, "
+            "substitutes for a trained human rater conducting a structured interview. "
+            "Treat it as an informed, informal signal, not a placement or grading "
+            "decision."
         )
     else:
         report.append(analysis.get('actfl_note', 'No estimate available.'))
@@ -835,7 +965,7 @@ def analyze_conversation():
             return jsonify({"error": "No conversation data provided"}), 400
         
         # Generate analysis report
-        report = analyze_conversation_metrics(conversation)
+        report = analyze_conversation_metrics(conversation, bot_id=bot_id)
         
         # Create response with text file
         filename = f"conversation-analysis-{bot_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
