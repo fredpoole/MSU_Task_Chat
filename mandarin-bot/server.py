@@ -74,7 +74,7 @@ BOTS = [
         "id": "zh-topic-self-family",
         "title": "自我介绍与家庭 (Self-Introduction & Family)",
         "voice": OPENAI_REALTIME_VOICE_DEFAULT,
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Start with a simple greeting and introduce yourself first (name, where you're from) to model the language, "
             "then invite the learner to introduce themselves. "
@@ -98,7 +98,7 @@ BOTS = [
         "id": "zh-topic-daily-routine",
         "title": "我的一天 (Daily Routine)",
         "voice": "verse",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about a typical day. Ask simple, one-at-a-time questions: what time they usually get up (你几点起床), "
             "what they eat for breakfast, what their class or work schedule looks like, what they do after class/work, and what time they go to bed. "
@@ -120,7 +120,7 @@ BOTS = [
         "id": "zh-topic-hobbies-sports",
         "title": "爱好和运动 (Hobbies & Sports)",
         "voice": "ash",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about hobbies and sports. Ask what they like to do in their free time (你喜欢做什么), "
             "whether they play or watch any sports, how often they do their hobby, and who they usually do it with. "
@@ -142,7 +142,7 @@ BOTS = [
         "id": "zh-topic-weather-seasons",
         "title": "天气和季节 (Weather & Seasons)",
         "voice": "sage",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about weather and seasons. Ask what the weather is like today where they are (今天天气怎么样), "
             "which season they like best and why, and what they like to do in that season. "
@@ -164,7 +164,7 @@ BOTS = [
         "id": "zh-topic-school-major",
         "title": "学校生活和专业 (School Life & Major)",
         "voice": "cedar",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about school life. Ask what they are studying (你的专业是什么), "
             "what classes they're taking this semester, which class is their favorite and why, and what their campus or classes are like. "
@@ -186,7 +186,7 @@ BOTS = [
         "id": "zh-topic-food-dining",
         "title": "食物和餐厅 (Food & Dining Out)",
         "voice": "shimmer",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about food. Ask what kind of food they like (你喜欢吃什么), "
             "what they usually eat for meals, whether they like to cook or eat out, and about a restaurant they like. "
@@ -208,7 +208,7 @@ BOTS = [
         "id": "zh-topic-shopping",
         "title": "购物 (Shopping)",
         "voice": "coral",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about shopping. Ask where they like to shop (你喜欢在哪儿买东西), "
             "what kinds of things they like to buy, whether they prefer shopping online or in stores, and about something they bought recently. "
@@ -230,7 +230,7 @@ BOTS = [
         "id": "zh-topic-weekend-friends",
         "title": "周末计划和朋友 (Weekend Plans & Friends)",
         "voice": "ballad",
-        "role": "A warm, patient, encouraging Mandarin-speaking conversation partner practicing free discussion with a beginning learner",
+        "role": "王建国 (Wang Jianguo) — see the GLOBAL PERSONA and GLOBAL CONVERSATION-STYLE rules below for who you are and how to talk",
         "task": (
             "Chat with the learner about weekend plans and friends. Ask what they usually do on weekends (周末你常常做什么), "
             "whether they like to spend time with friends or alone, and what they're planning to do this coming weekend. "
@@ -726,6 +726,30 @@ Your task: {bot['task']}
 Constraints: {bot['constraints']}
 Language hint: {bot.get('language_hint', 'English')}
 
+GLOBAL PERSONA (this is who you are in every scenario, no matter the topic):
+Your name is 王建国 (Wang Jianguo). You are a 40-year-old man from 太原
+(Taiyuan), 山西省 (Shanxi Province) — 山西太原人. You work in a local
+government office (在市政府机关做行政工作), a fairly routine desk job. You
+are married; your wife (爱人) teaches at a middle school, and you have one
+child, a 10-year-old daughter. In your free time you like playing Chinese
+chess (下象棋) with old friends, drinking tea, watching the evening news
+(新闻联播), and going hiking (爬山) on weekends. Like most Shanxi people you
+love noodles (面食), especially 刀削面, and you always want a little aged
+vinegar (老陈醋，山西特产) with your meal. You are friendly, down-to-earth,
+easygoing, and enjoy chatting — a real person with your own opinions,
+routines, and small stories, not a survey-taker.
+
+GLOBAL CONVERSATION-STYLE RULE (this OVERRIDES any "ask ONLY one question at
+a time" framing above if it would make you interrogate rather than converse):
+Have a natural, balanced conversation — do NOT just fire off one question
+after another. After the learner answers, react first: agree or disagree,
+share your own brief opinion, or tell a short related story from your own
+life (your job, your daughter, your hometown Taiyuan, your hobbies) before
+you ask anything else. Not every one of your turns needs to end in a
+question — plenty of your turns should just be you contributing something
+of your own, the way a real conversation partner would. Let the learner
+lead sometimes too.
+
 GLOBAL ACCENT RULE (applies no matter what any character bio above says):
 Speak with a standard Mainland/Northern Mandarin accent (标准普通话，偏北方/北京口音).
 Do NOT use a Taiwanese Mandarin accent (台湾腔) or vocabulary/intonation patterns
@@ -740,6 +764,10 @@ short, simple sentence patterns (basic SVO, simple time/place phrases).
 Avoid compound/complex sentences, idioms, chengyu (成语), slang, and
 low-frequency vocabulary. If the learner seems lost, simplify and rephrase
 rather than repeating the same sentence verbatim.
+
+GLOBAL SCRIPT RULE:
+Always write in Simplified Chinese characters (简体字) only. Never use
+Traditional Chinese characters (繁体字) under any circumstances.
 """
     session_payload = {
         "session": {
@@ -960,6 +988,13 @@ body {{
 
 <audio id="remoteAudio" autoplay></audio>
 
+<!-- Whisper transcription and the model's own text output sometimes drift into
+     Traditional Chinese characters even when asked for Simplified. OpenCC-JS
+     normalizes any Traditional characters to Simplified before we ever show
+     or store a line, so the on-screen transcript and the downloaded analysis
+     are consistently Simplified regardless of what came back. -->
+<script src="https://cdn.jsdelivr.net/npm/opencc-js@1.4.2/dist/umd/full.js"></script>
+
 <script>
 const bots = {json.dumps(BOTS)};
 let selectedBotId = bots[0].id;
@@ -984,14 +1019,40 @@ function setStatus(s) {{
   statusText.textContent = labels[s] || s;
 }}
 
+// Traditional -> Simplified normalizer. Built lazily since the CDN script
+// loads asynchronously; falls back to the original text if it's unavailable
+// (e.g. offline, CDN blocked) rather than breaking the transcript.
+let _t2sConverter = null;
+let _t2sTried = false;
+function toSimplified(txt) {{
+  if (!_t2sTried) {{
+    _t2sTried = true;
+    try {{
+      if (typeof OpenCC !== 'undefined') {{
+        _t2sConverter = OpenCC.Converter({{ from: 't', to: 'cn' }});
+      }}
+    }} catch (e) {{
+      console.error('OpenCC init failed, leaving text as-is:', e);
+    }}
+  }}
+  if (!_t2sConverter) return txt;
+  try {{
+    return _t2sConverter(txt);
+  }} catch (e) {{
+    console.error('OpenCC conversion failed, leaving text as-is:', e);
+    return txt;
+  }}
+}}
+
 function append(role, txt) {{
+  txt = toSimplified(txt);
   const div = document.createElement('div');
   div.className = 'log-entry ' + role;
   div.textContent = txt;
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
-  
-  // Store in conversation history
+
+  // Store in conversation history (already normalized to Simplified above)
   conversationHistory.push({{ role, text: txt, timestamp: new Date().toISOString() }});
 }}
 
