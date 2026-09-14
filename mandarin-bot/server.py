@@ -69,16 +69,18 @@ RT_SILENCE_MS = int(os.getenv("RT_SILENCE_MS", "1200"))  # pause after user stop
 VAD_THRESHOLD = float(os.getenv("RT_VAD_THRESHOLD", "0.5"))
 # Text model used to read the whole transcript and produce the ACTFL-informed
 # estimate (a separate, non-realtime OpenAI call from the voice session
-# above). Bumped from "terra" (mid tier) to "sol" (top tier) after "terra"
-# rated a since-independently-OPI-rated Advanced-Mid speaker as
-# Intermediate-Mid — a 3-sublevel miss. This is a nuanced holistic-judgment
-# task (weighing four rating criteria, distinguishing genuine learner errors
-# from ASR transcription noise) where reasoning quality matters more than
-# the small extra per-analysis cost (still on the order of a few cents per
-# conversation). Swap via env var without a code change if you want to go
-# back to "terra" or down to the cheapest ("luna") tier, or use a different
-# model entirely.
-OPENAI_ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.6-sol")
+# above). Reverted the default back to "terra" (mid tier) — the top tier
+# ("sol") was tried briefly for the extra reasoning quality on this nuanced
+# judgment call, but access to "sol" via the API is gated per-organization
+# (it can require identity/spending-threshold verification beyond what a
+# working "terra" key already has), and it's also a heavier/slower model,
+# so a key or Render instance that isn't cleared for it starts failing
+# every /analyze call with an OpenAI 404/permission error instead of just
+# degrading gracefully. "terra" is the safer default for reliability. If
+# your OpenAI org has confirmed "sol" access, you can opt into it per
+# environment via the OPENAI_ANALYSIS_MODEL variable below without a code
+# change — just verify it actually works on your account first.
+OPENAI_ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.6-terra")
 
 # 8 preset discussion-topic "bots". Edit freely.
 BOTS = [
