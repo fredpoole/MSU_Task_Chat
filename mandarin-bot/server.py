@@ -69,11 +69,16 @@ RT_SILENCE_MS = int(os.getenv("RT_SILENCE_MS", "1200"))  # pause after user stop
 VAD_THRESHOLD = float(os.getenv("RT_VAD_THRESHOLD", "0.5"))
 # Text model used to read the whole transcript and produce the ACTFL-informed
 # estimate (a separate, non-realtime OpenAI call from the voice session
-# above). "terra" is OpenAI's mid tier as of this writing — a reasonable
-# balance of quality/cost for a holistic judgment call like this one. Swap
-# via env var without a code change if you want the top ("sol") or
-# cheapest ("luna") tier instead, or a different model entirely.
-OPENAI_ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.6-terra")
+# above). Bumped from "terra" (mid tier) to "sol" (top tier) after "terra"
+# rated a since-independently-OPI-rated Advanced-Mid speaker as
+# Intermediate-Mid — a 3-sublevel miss. This is a nuanced holistic-judgment
+# task (weighing four rating criteria, distinguishing genuine learner errors
+# from ASR transcription noise) where reasoning quality matters more than
+# the small extra per-analysis cost (still on the order of a few cents per
+# conversation). Swap via env var without a code change if you want to go
+# back to "terra" or down to the cheapest ("luna") tier, or use a different
+# model entirely.
+OPENAI_ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.6-sol")
 
 # 8 preset discussion-topic "bots". Edit freely.
 BOTS = [
@@ -349,17 +354,28 @@ def analyze_conversation_metrics(conversation, bot_id=None):
     elif turn_taking['user_turns'] < MIN_USER_TURNS_FOR_ACTFL:
         actfl_note = "Not enough learner turns yet for a reliable estimate — keep the conversation going a bit longer."
     else:
+        sentence_caveat = (
+            " [UNRELIABLE — this transcript has little/no terminal punctuation, so "
+            "clause-chains got counted as one giant \"sentence\" per turn; don't read "
+            "this as literal sentence length or as evidence the speaker isn't producing "
+            "distinct sentences]" if basic.get('punctuation_sparse') else ""
+        )
         metrics_summary = (
             f"- Learner turns: {turn_taking['user_turns']}, total words (jieba-segmented): {basic['total_words']}, "
             f"avg words/turn: {basic['avg_words_per_turn']:.1f}\n"
-            f"- Sentences: {basic['total_sentences']} (avg {basic['avg_words_per_sentence']:.1f} words/sentence)\n"
+            f"- Sentences (punctuation-based count): {basic['total_sentences']} "
+            f"(avg {basic['avg_words_per_sentence']:.1f} words/sentence){sentence_caveat}\n"
             f"- Connector uses (因为/所以/但是/虽然...): {complexity.get('connector_count', 0)} "
             f"({', '.join(complexity.get('connectors_used', [])) or 'none'})\n"
             f"- Aspect-marker uses (了/过/着): {complexity.get('aspect_marker_count', 0)}\n"
             f"- Vocabulary: {vocab.get('total_unique_words', 0)} unique words, "
             f"type-token ratio {vocab.get('type_token_ratio', 0)}\n"
-            f"- Filler words: {fluency.get('total_filler_words', 0)}, "
-            f"hesitations/repetitions: {fluency.get('hesitations_repetitions', 0)}"
+            f"- Filler words: {fluency.get('total_filler_words', 0)}, hesitations/repetitions: "
+            f"{fluency.get('hesitations_repetitions', 0)} [note: natural fillers like 嗯/那个/就是/"
+            f"然后 are normal in fluent spontaneous speech, including from highly proficient or "
+            f"native speakers — a nonzero or even high count here is NOT by itself evidence of "
+            f"lower proficiency; only real communication breakdown or abandoned utterances should "
+            f"count against fluency]"
         )
         actfl_estimate = estimate_actfl_level_llm(conversation, bot_title, metrics_summary)
 
@@ -384,6 +400,16 @@ def analyze_basic_stats(text, turns):
     words = [w for w in jieba.cut(text) if re.search(r'[一-鿿]', w)]
     sentences = [s for s in re.split(r'[。！？!?.]+', text) if s.strip()]
 
+    # Whisper's transcription of spontaneous spoken Chinese often carries
+    # almost no terminal punctuation (speakers run clause after clause with
+    # only commas, or no punctuation at all) even though a human would hear
+    # several distinct sentences. When that happens, splitting on 。！？
+    # collapses each turn into ~1 "sentence," and avg-words-per-sentence
+    # balloons into a meaningless number. Flag it so callers can caveat
+    # instead of reporting it as if it were a reliable measure.
+    turns_with_terminal_punct = sum(1 for t in turns if re.search(r'[。！？!?]', t))
+    punctuation_sparse = len(turns) > 0 and (turns_with_terminal_punct / len(turns)) < 0.5
+
     return {
         'total_characters': len(hanzi),
         'total_words': len(words),
@@ -391,7 +417,8 @@ def analyze_basic_stats(text, turns):
         'total_turns': len(turns),
         'avg_words_per_sentence': len(words) / max(len(sentences), 1),
         'avg_words_per_turn': len(words) / max(len(turns), 1),
-        'avg_characters_per_word': len(hanzi) / max(len(words), 1)
+        'avg_characters_per_word': len(hanzi) / max(len(words), 1),
+        'punctuation_sparse': punctuation_sparse
     }
 
 
@@ -476,31 +503,52 @@ ACTFL_LEVELS = [
     "Advanced-Low", "Advanced-Mid", "Advanced-High"
 ]
 
-# Our own paraphrase of the ACTFL Speaking Guidelines' discourse-level
-# descriptors for the model to reason from — not the official ACTFL text
-# (that's ACTFL's copyrighted material; this is a working summary written
-# for this prompt, not a substitute for the actual Guidelines).
+# Our own paraphrase of the ACTFL Speaking Guidelines for the model to reason
+# from — not the official ACTFL text (that's ACTFL's copyrighted material;
+# this is a working summary written for this prompt). Structured around
+# ACTFL's own four rating criteria (Function, Context/Content, Text Type,
+# Accuracy) rather than just level-by-level prose, because an earlier
+# version of this prompt (no criteria breakdown, just prose descriptors)
+# rated a since-independently-OPI-rated Advanced-Mid speaker as
+# Intermediate-Mid — a 3-sublevel miss. The likely causes, addressed below:
+# the rater over-weighted isolated accuracy issues (some of which turned
+# out to be Whisper transcription noise, not learner errors) and
+# under-weighted Text Type (connected, multi-clause discourse), which is
+# usually the actual Intermediate/Advanced differentiator.
 ACTFL_RUBRIC_SUMMARY = """
-- Novice (Low/Mid/High): Communicates with isolated words, short memorized
-  phrases, and formulaic expressions. Little or no evidence of the learner
-  independently generating original sentences; relies on lists, rote chunks,
-  and often needs heavy support or repetition from the interlocutor to
-  maintain any exchange. Novice-High may occasionally produce a simple
-  original sentence but it's inconsistent.
-- Intermediate (Low/Mid/High): Creates with the language — produces original,
-  if simple, sentences on everyday/familiar topics (self, family, routines,
-  school, immediate needs), and can string a few sentences together to ask
-  and answer questions and handle simple, predictable exchanges. Errors are
-  common, especially as utterances get longer, but communication succeeds on
-  familiar topics. Intermediate-High starts handling occasional unexpected
-  complications and connects sentences with basic connectors more reliably.
-- Advanced (Low/Mid/High): Communicates in full, connected paragraphs, not
-  just discrete sentences. Narrates and describes with reasonable accuracy
-  across major time frames (past/present/future), handles a complication or
-  unexpected turn in a routine situation, and sustains extended discourse
-  on concrete, familiar, and some less-familiar topics. Advanced-High
-  approaches the ability to support opinions and discuss some abstract
-  topics, though not as consistently as Superior.
+A level is the level at which a speaker can SUSTAIN performance across all
+four criteria below — NOT the level at which every sentence is error-free.
+Occasional errors occur at every level, including Advanced and Superior,
+and do not by themselves cap a rating if the other criteria are clearly met.
+Weigh all four criteria; do not let an error-count alone drive the rating.
+
+- FUNCTION / TASKS — what the speaker can actually DO with the language.
+  Novice: names/lists things, uses memorized formulas. Intermediate: asks
+  and answers simple questions, handles simple everyday transactions.
+  Advanced: narrates and describes accurately across major time frames
+  (past/present/future) and handles a complication or unexpected turn in a
+  routine situation (e.g., correcting a misunderstanding, negotiating
+  around an unexpected response). Superior: supports opinions, hypothesizes,
+  discusses abstract topics.
+- TEXT TYPE — often the PRIMARY differentiator between Intermediate and
+  Advanced, so weigh it heavily. Novice: isolated words/phrases. Intermediate:
+  discrete sentences, and loosely strung-together sentences. Advanced:
+  genuinely CONNECTED discourse — multiple clauses/sentences linked by
+  cohesive devices (connectors, references back to earlier content,
+  self-correction/repair, cause-effect framing) rather than just juxtaposed,
+  produced across multiple conversational turns. A speaker whose turns are
+  long, multi-clause, and cohesively linked is demonstrating Advanced Text
+  Type even if the delivery is loose/run-on the way real spontaneous speech
+  is — spoken language is not written prose, and run-on structure by itself
+  is not a Text Type downgrade.
+- CONTEXT/CONTENT — how familiar/everyday vs. broader are the topics the
+  speaker can handle. Advanced speakers handle concrete, practical, factual
+  topics tied to work, home, and personal life, not just survival topics.
+- ACCURACY — how well-controlled is the grammar/vocabulary. At Advanced,
+  errors don't usually interfere with communication and don't collapse under
+  a complication. Advanced does NOT require error-free speech — do not
+  downgrade a rating to Intermediate solely because some errors are present
+  if Function, Text Type, and Context/Content clearly support Advanced.
 """.strip()
 
 
@@ -511,13 +559,21 @@ def estimate_actfl_level_llm(conversation, bot_title, metrics_summary):
     it to make a holistic ACTFL-informed judgment — grammar, coherence, task
     performance, and error patterns included, none of which the surface-level
     counts alone can see. This REPLACES the old point-scored heuristic, which
-    was structurally biased against short conversational turns (see chat
-    history / deployment notes for why).
+    was structurally biased against short conversational turns.
+
+    The model is asked to reason through ACTFL's four rating criteria
+    explicitly (function, text type, context/content, accuracy) before
+    committing to a level, and to separate likely ASR/transcription noise
+    from genuine learner errors — both were diagnosed as real failure modes
+    after this rated a since-independently-OPI-rated Advanced-Mid speaker as
+    Intermediate-Mid.
 
     Returns a dict with 'level', 'confidence', 'rationale', 'strengths',
-    'areas_to_grow' on success, or a dict with only 'error' on failure — the
-    caller is expected to check for 'error' and degrade gracefully rather
-    than let this take down the whole /analyze response.
+    'areas_to_grow', 'function_evidence', 'text_type_evidence',
+    'context_content_evidence', 'accuracy_evidence', and
+    'likely_transcription_errors' on success, or a dict with only 'error' on
+    failure — the caller is expected to check for 'error' and degrade
+    gracefully rather than let this take down the whole /analyze response.
 
     NOTE: like the heuristic it replaces, this is NOT a validated ACTFL OPI
     rating. An LLM reading a transcript is a much better-informed judge than
@@ -537,32 +593,49 @@ def estimate_actfl_level_llm(conversation, bot_title, metrics_summary):
 
     system_prompt = f"""
 You are an experienced Chinese-language proficiency rater giving a rough,
-informal ACTFL-informed read on ONE short conversation between a CFL
-(Chinese as a Foreign Language) learner and a chatbot conversation partner.
-The learner is expected to be somewhere around Novice-High to
-Intermediate-Low (a 1st/2nd-year university Chinese class), but judge only
-from the actual evidence in the transcript — do not anchor to that
-expectation.
+informal ACTFL-informed read on ONE conversation between a CFL (Chinese as
+a Foreign Language) speaker and a chatbot conversation partner. This app is
+used by a wide range of speakers, from first-year students to highly
+advanced/native-like speakers — do NOT assume any particular starting level;
+judge strictly from the evidence in this transcript alone.
 
-Discourse-level descriptors to reason from (our own summary, not the
-official ACTFL Guidelines text):
+Rating framework to reason from (our own summary of ACTFL's four rating
+criteria, not the official ACTFL Guidelines text):
 {ACTFL_RUBRIC_SUMMARY}
 
 Judge ONLY the learner's turns (labeled "学生 (Learner)"). The bot's turns
 are context for what was being asked/discussed, not part of what you're
-rating. Base your judgment on the substance of what the learner actually
-produced: sentence-level grammar and accuracy, whether they created
-original language vs. relying on memorized chunks, vocabulary range and
-appropriateness, coherence, and how well they handled the exchange — not on
-turn length by itself (this is a live back-and-forth chat, so even a strong
-speaker will produce short turns; do not penalize brevity if the Chinese
-produced is accurate and appropriately connected).
+rating.
+
+CRITICAL — separate transcription noise from real learner errors: this
+transcript comes from automatic speech recognition (Whisper) on live,
+spontaneous speech, not from written text. Whisper sometimes mis-hears
+audio and substitutes a more common (but contextually nonsensical or wildly
+off-topic) word or phrase — for example producing an entertainment-industry
+term in the middle of an unrelated sentence, or a phrase that doesn't
+parse as coherent Chinese at all even as a learner error. When a word or
+short phrase is semantically nonsensical or bizarrely out of register/topic
+given the surrounding sentence, treat it as a PROBABLE TRANSCRIPTION ERROR,
+list it separately, and do NOT count it as evidence of the learner's actual
+proficiency in either direction. Only treat something as a genuine learner
+error if it's a plausible thing for a language learner to actually say
+(wrong particle, wrong measure word, wrong word order, overgeneralized
+grammar rule, etc.).
+
+Also: natural spontaneous speech — including from highly proficient or
+native speakers — normally contains filler words/hesitation markers (嗯,
+呃, 那个, 就是, 然后, 这个) and loose, run-on clause-chaining rather than
+clean written-style sentences. Do not treat these by themselves as evidence
+of lower proficiency; they are a feature of real spoken production, not a
+deficiency. Only sustained inability to complete a thought, or communication
+that genuinely breaks down, counts against fluency.
 
 You will also be given a summary of objective counts (word/character counts,
 connector usage, aspect-marker usage, vocabulary diversity) computed
-separately from the same transcript. Use these as supporting evidence, not
-as the primary basis — they can undercount things like grammatical accuracy
-that only a read of the actual text reveals.
+separately from the same transcript, with caveats inline where a count is
+unreliable. Use these as supporting evidence only, never as the primary
+basis — they can't see grammatical accuracy, Text Type, or genuine
+communicative function the way a read of the actual text can.
 
 Respond with a level from exactly this list: {", ".join(ACTFL_LEVELS)}.
 If the sample is really too thin or unclear to judge even though it met the
@@ -573,7 +646,8 @@ explain why in the rationale.
     user_prompt = f"""
 Conversation topic: {bot_title}
 
-Objective metrics computed from this transcript (supporting context only):
+Objective metrics computed from this transcript (supporting context only — see
+inline caveats where a count may be unreliable):
 {metrics_summary}
 
 Full transcript:
@@ -586,6 +660,27 @@ Full transcript:
         "schema": {
             "type": "object",
             "properties": {
+                "function_evidence": {
+                    "type": "string",
+                    "description": "What communicative tasks/functions the learner actually accomplished, with specific examples."
+                },
+                "text_type_evidence": {
+                    "type": "string",
+                    "description": "Discrete words/sentences vs. genuinely connected, multi-clause discourse — cite specific examples of cohesive devices (connectors, repair, references back) if present."
+                },
+                "context_content_evidence": {
+                    "type": "string",
+                    "description": "How familiar/everyday vs. broader/complex the topics handled were."
+                },
+                "accuracy_evidence": {
+                    "type": "string",
+                    "description": "Genuine grammar/vocabulary accuracy assessment, EXCLUDING anything listed in likely_transcription_errors."
+                },
+                "likely_transcription_errors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific words/phrases from the transcript that look like probable Whisper mis-transcriptions (nonsensical or bizarrely out-of-context) rather than genuine learner errors, with a brief note on why. Empty array if none stood out."
+                },
                 "level": {
                     "type": "string",
                     "enum": ACTFL_LEVELS + ["Insufficient Sample"]
@@ -596,7 +691,7 @@ Full transcript:
                 },
                 "rationale": {
                     "type": "string",
-                    "description": "2-4 sentences of evidence-based reasoning citing specific things the learner said."
+                    "description": "2-4 sentences synthesizing the four criteria above into the final level judgment."
                 },
                 "strengths": {
                     "type": "array",
@@ -606,10 +701,14 @@ Full transcript:
                 "areas_to_grow": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "1-3 short, specific, actionable things to work on next."
+                    "description": "1-3 short, specific, actionable things to work on next (based on genuine errors only, not suspected transcription noise)."
                 }
             },
-            "required": ["level", "confidence", "rationale", "strengths", "areas_to_grow"],
+            "required": [
+                "function_evidence", "text_type_evidence", "context_content_evidence",
+                "accuracy_evidence", "likely_transcription_errors", "level",
+                "confidence", "rationale", "strengths", "areas_to_grow"
+            ],
             "additionalProperties": False
         }
     }
@@ -671,6 +770,14 @@ def format_analysis_report(analysis, conversation):
     report.append(f"Total Sentences: {bs['total_sentences']}")
     report.append(f"Total Turns: {bs['total_turns']}")
     report.append(f"Average Words per Sentence: {bs['avg_words_per_sentence']:.2f}")
+    if bs.get('punctuation_sparse'):
+        report.append(
+            "  (caveat: most turns had little or no terminal punctuation in the "
+            "transcription, so this number is unreliable as an actual sentence-length "
+            "measure — spoken Chinese often transcribes as run-on comma chains rather "
+            "than clean 。-delimited sentences, not because the speaker isn't producing "
+            "distinct sentences)"
+        )
     report.append(f"Average Words per Turn: {bs['avg_words_per_turn']:.2f}")
     report.append(f"Average Characters per Word: {bs['avg_characters_per_word']:.2f}")
     report.append("")
@@ -739,6 +846,25 @@ def format_analysis_report(analysis, conversation):
     elif est:
         report.append(f"Estimated Level: {est.get('level', 'Unknown')}")
         report.append(f"Confidence: {est.get('confidence', 'unknown')}")
+        report.append("")
+        if est.get('likely_transcription_errors'):
+            report.append(
+                "Likely ASR transcription noise (excluded from the accuracy judgment "
+                "below — flagged by the model as probably mis-heard/mis-transcribed "
+                "speech rather than a genuine learner error):"
+            )
+            for t in est['likely_transcription_errors']:
+                report.append(f"  - {t}")
+            report.append("")
+        report.append("Evidence by ACTFL criterion:")
+        if est.get('function_evidence'):
+            report.append(f"  Function/Tasks: {est['function_evidence']}")
+        if est.get('context_content_evidence'):
+            report.append(f"  Context/Content: {est['context_content_evidence']}")
+        if est.get('text_type_evidence'):
+            report.append(f"  Text Type: {est['text_type_evidence']}")
+        if est.get('accuracy_evidence'):
+            report.append(f"  Accuracy: {est['accuracy_evidence']}")
         report.append("")
         report.append("Rationale:")
         report.append(f"  {est.get('rationale', '')}")
@@ -939,6 +1065,15 @@ Traditional Chinese characters (繁体字) under any circumstances.
             }
         }
     }
+    if not OPENAI_API_KEY:
+        # The single most common cause of "session creation failed" after a
+        # fresh deploy: this service's own OPENAI_API_KEY env var isn't set
+        # (each Render service needs it set separately — it does NOT
+        # inherit from a different service, even one in the same repo).
+        msg = "OPENAI_API_KEY is not set on this Render service's Environment tab."
+        print(f"create_session error: {msg}")
+        return jsonify({"error": msg}), 500
+
     try:
         resp = requests.post(
             "https://api.openai.com/v1/realtime/client_secrets",
@@ -951,7 +1086,13 @@ Traditional Chinese characters (繁体字) under any circumstances.
         )
         if not resp.ok:
             print(f"OpenAI session create error {resp.status_code}: {resp.text}")
-        resp.raise_for_status()
+            # Surface OpenAI's actual error text to the browser instead of a
+            # generic failure — this is what actually explains "why", and
+            # previously only showed up in Render's server logs.
+            return jsonify({
+                "error": f"OpenAI session create error {resp.status_code}",
+                "openai_detail": resp.text[:2000]
+            }), resp.status_code
         return jsonify(resp.json()), resp.status_code
     except Exception as e:
         import traceback
@@ -1298,7 +1439,16 @@ async function connect() {{
       headers: {{ 'Content-Type': 'application/json' }},
       body: JSON.stringify({{ bot_id: selectedBotId }})
     }});
-    if (!sessionResp.ok) throw new Error('Session creation failed');
+    if (!sessionResp.ok) {{
+      // Show the server's actual reason (e.g. missing API key, OpenAI's own
+      // error text) instead of a generic message — much faster to debug.
+      let detail = '';
+      try {{
+        const errBody = await sessionResp.json();
+        detail = errBody.openai_detail || errBody.error || '';
+      }} catch (e) {{ /* body wasn't JSON; fall through with no detail */ }}
+      throw new Error('Session creation failed' + (detail ? ': ' + detail : ''));
+    }}
     const session = await sessionResp.json();
     console.log('Session created');
 
