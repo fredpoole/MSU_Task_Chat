@@ -805,7 +805,7 @@ def realtime_page():
 * {{ box-sizing:border-box; }}
 body {{
   margin:0; padding:0; font-family:system-ui,sans-serif;
-  background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+  background:linear-gradient(135deg,#18453B 0%,#0B2E26 100%);
   color:#fff; min-height:100vh; display:flex; flex-direction:column;
 }}
 .top-bar {{
