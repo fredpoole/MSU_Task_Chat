@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>中文口语练习 · Mandarin Speaking Practice</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="top-bar">
+  <h1>🎤 中文口语练习 <span class="sub">Mandarin Speaking Practice</span></h1>
+  <div class="status-indicator" id="statusBox" hidden>
+    <div class="status-dot idle" id="statusDot"></div>
+    <span id="statusText">Idle</span>
+  </div>
+</header>
+
+<!-- ============================ SETUP SCREEN ============================ -->
+<main id="setupScreen" class="container">
+  <p class="intro">Design the person you want to talk to, then start a voice conversation in Mandarin.
+    When you're done, download your stats and analysis.</p>
+
+  <section class="card">
+    <h2><span class="step">1</span> Your level</h2>
+    <p class="help">Your partner adjusts vocabulary, sentence length and speed to this level.</p>
+    <div class="level-grid" id="levelOptions"></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">2</span> The task</h2>
+    <label class="field">
+      <span>What do you want to practice?</span>
+      <select id="taskSelect"></select>
+    </label>
+    <label class="field" id="customTaskField" hidden>
+      <span>Describe the situation (in English or Chinese)</span>
+      <textarea id="customTask" rows="3" maxlength="600"
+        placeholder="e.g. You're my roommate and we need to decide how to split chores. / 你是我的同事，我们一起计划公司的春节晚会。"></textarea>
+    </label>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">3</span> Your partner</h2>
+    <div class="row">
+      <div class="field">
+        <span>Gender</span>
+        <div class="segmented" id="genderOptions"></div>
+      </div>
+      <label class="field">
+        <span>Age</span>
+        <select id="ageSelect"></select>
+      </label>
+    </div>
+    <div class="field">
+      <span>Personality <em class="muted">(pick up to 3)</em></span>
+      <div class="chips" id="personalityOptions"></div>
+    </div>
+    <div class="row">
+      <label class="field">
+        <span>Name <em class="muted">(optional)</em></span>
+        <input id="nameInput" maxlength="20" placeholder="random if blank, e.g. 李静">
+      </label>
+      <label class="field">
+        <span>Occupation <em class="muted">(optional)</em></span>
+        <input id="occupationInput" maxlength="60" placeholder="e.g. 大学生 / nurse / taxi driver">
+      </label>
+      <label class="field">
+        <span>Hometown <em class="muted">(optional)</em></span>
+        <input id="hometownInput" maxlength="30" placeholder="matches accent if blank">
+      </label>
+    </div>
+    <label class="field">
+      <span>Anything else about them? <em class="muted">(optional)</em></span>
+      <input id="extraInput" maxlength="300" placeholder="e.g. loves basketball, just got back from studying in the US, has a cat">
+    </label>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">4</span> How they speak</h2>
+    <div class="row">
+      <label class="field">
+        <span>Accent <em class="muted">(best effort)</em></span>
+        <select id="accentSelect"></select>
+      </label>
+      <label class="field">
+        <span>Speed</span>
+        <select id="speedSelect"></select>
+      </label>
+      <label class="field">
+        <span>Corrections</span>
+        <select id="feedbackSelect"></select>
+      </label>
+      <label class="field">
+        <span>Voice</span>
+        <select id="voiceSelect"></select>
+      </label>
+    </div>
+    <p class="help">Gemini has no accent switch, so the accent is requested in the partner's instructions.
+      You'll hear it in word choice and intonation, but it won't always be strong.</p>
+  </section>
+
+  <section class="card preview">
+    <h2>You'll be talking to…</h2>
+    <p id="previewText"></p>
+    <div class="actions">
+      <button class="btn btn-primary" id="startBtn">Start conversation</button>
+      <button class="btn btn-secondary" id="randomBtn" type="button">🎲 Surprise me</button>
+      <button class="btn btn-secondary" id="copyLinkBtn" type="button">🔗 Copy link to this setup</button>
+    </div>
+    <p class="help">Tip: use headphones so the partner doesn't hear itself.</p>
+  </section>
+</main>
+
+<!-- ============================ CHAT SCREEN ============================ -->
+<main id="chatScreen" class="container" hidden>
+  <section class="partner-card">
+    <div class="avatar" id="partnerAvatar">?</div>
+    <div>
+      <div class="partner-name" id="partnerName"></div>
+      <div class="partner-meta" id="partnerMeta"></div>
+    </div>
+    <div class="timer" id="timer">0:00</div>
+  </section>
+
+  <div class="chat-area" id="chatLog" aria-live="polite"></div>
+
+  <div class="controls">
+    <button class="btn btn-secondary" id="muteBtn" disabled>🎙️ Mute mic <span class="meter"><span id="micMeter"></span></span></button>
+    <button class="btn btn-secondary" id="nudgeBtn" disabled>💬 Nudge partner</button>
+    <button class="btn btn-toggle" id="toggleTranscriptBtn">Hide transcript</button>
+    <button class="btn btn-danger" id="endBtn" disabled>End conversation</button>
+  </div>
+
+  <section class="card results" id="resultsPanel" hidden>
+    <h2>Your results</h2>
+    <p class="help" id="resultsNote">Analyze the conversation to get your stats and an ACTFL-informed estimate.
+      Talk for at least 5 minutes for a level estimate.</p>
+    <div class="actions">
+      <button class="btn btn-info" id="analyzeBtn">📊 Analyze my conversation</button>
+      <button class="btn btn-secondary" id="newPartnerBtn">Change partner</button>
+      <button class="btn btn-secondary" id="againBtn">Talk again (same partner)</button>
+    </div>
+    <div id="resultsSummary" hidden></div>
+    <div class="downloads" id="downloads" hidden>
+      <span>Download:</span>
+      <button class="btn btn-small" data-format="html">Report (.html)</button>
+      <button class="btn btn-small" data-format="csv">Stats (.csv)</button>
+      <button class="btn btn-small" data-format="json">All data (.json)</button>
+      <button class="btn btn-small" data-format="txt">Plain text (.txt)</button>
+    </div>
+  </section>
+</main>
+
+<!-- Speech recognition and the model's own text sometimes drift into
+     Traditional characters even when asked for Simplified. OpenCC-JS
+     normalizes them before we show or store a line. -->
+<script src="https://cdn.jsdelivr.net/npm/opencc-js@1.4.2/dist/umd/full.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
