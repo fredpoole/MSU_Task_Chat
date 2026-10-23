@@ -110,16 +110,25 @@ def create_session():
         "expireTime": (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "newSessionExpireTime": (now + timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         # Lock the token to the Live model so it can't be reused for anything else.
-        "liveConnectConstraints": {"model": setup["model"]},
+        "bidiGenerateContentSetup": {"model": setup["model"]},
     }
 
-    try:
-        resp = requests.post(
+    def mint(body):
+        return requests.post(
             "https://generativelanguage.googleapis.com/v1beta/auth_tokens",
             headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-            json=token_body,
+            json=body,
             timeout=15,
         )
+
+    try:
+        resp = mint(token_body)
+        if resp.status_code == 400 and "Unknown name" in resp.text:
+            # The constraint field name differs between API versions; the
+            # token is still single-use and expires in minutes without it.
+            print(f"Token constraint rejected, retrying without it: {resp.text[:300]}")
+            token_body.pop("bidiGenerateContentSetup")
+            resp = mint(token_body)
         if not resp.ok:
             print(f"Gemini token error {resp.status_code}: {resp.text}")
             return jsonify({
