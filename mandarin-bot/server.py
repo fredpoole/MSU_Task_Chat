@@ -109,8 +109,12 @@ def create_session():
         "uses": 1,
         "expireTime": (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "newSessionExpireTime": (now + timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        # Lock the token to the Live model so it can't be reused for anything else.
-        "bidiGenerateContentSetup": {"model": setup["model"]},
+        # A constrained token's setup REPLACES whatever the browser sends, so
+        # the whole partner setup (instructions, voice, transcription...)
+        # has to live here — locking only the model silently dropped the
+        # learner's persona/voice/level. Also means the browser can't
+        # swap in its own system prompt.
+        "bidiGenerateContentSetup": setup,
     }
 
     def mint(body):
